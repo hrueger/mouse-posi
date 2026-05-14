@@ -16,10 +16,11 @@ NdiPanel::NdiPanel(NdiReceiver* ndi, QWidget* parent)
 
     statusLabel_ = new QLabel("Click Scan to discover sources.");
     statusLabel_->setWordWrap(true);
-    statusLabel_->setStyleSheet("color: palette(mid); font-size: 11px;");
+    statusLabel_->setStyleSheet("color: palette(placeholderText); font-size: 11px;");
     layout->addWidget(statusLabel_);
 
     list_ = new QListWidget;
+    list_->setMinimumWidth(0);
     list_->setMaximumHeight(120);
     layout->addWidget(list_);
 

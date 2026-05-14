@@ -1,26 +1,45 @@
 #include "CollapsibleSection.h"
-#include <QToolButton>
+#include <QPushButton>
 #include <QFrame>
 #include <QVBoxLayout>
+#include <QApplication>
+#include <QPalette>
 
 CollapsibleSection::CollapsibleSection(const QString& title, QWidget* parent)
-    : QWidget(parent)
+    : QWidget(parent), title_(title)
 {
     auto* mainLayout = new QVBoxLayout(this);
     mainLayout->setContentsMargins(0, 0, 0, 0);
     mainLayout->setSpacing(0);
 
-    header_ = new QToolButton;
-    header_->setText(title);
-    header_->setCheckable(false);
-    header_->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
-    header_->setArrowType(Qt::DownArrow);
+    header_ = new QPushButton;
+    header_->setFlat(true);
     header_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    header_->setStyleSheet(
-        "QToolButton { border: none; border-bottom: 1px solid palette(mid);"
-        " padding: 4px 6px; font-weight: bold; text-align: left; }"
-        "QToolButton:hover { background: palette(midlight); }");
-    connect(header_, &QToolButton::clicked, this, &CollapsibleSection::toggleExpanded);
+    connect(header_, &QPushButton::clicked, this, &CollapsibleSection::toggleExpanded);
+
+    // palette() in QSS is not reliably resolved from qlementine's palette on macOS.
+    // Extract actual colors from qApp->palette() and bake them into the style string.
+    auto applyHeaderStyle = [this]() {
+        const QPalette p = qApp->palette();
+        const QString text = p.color(QPalette::WindowText).name();
+        const QString bg   = p.color(QPalette::Window).name();
+        const QString mid  = p.color(QPalette::Mid).name();
+        header_->setStyleSheet(QString(
+            "QPushButton {"
+            "  border: none;"
+            "  border-bottom: 1px solid %1;"
+            "  padding: 5px 8px;"
+            "  font-weight: bold;"
+            "  text-align: left;"
+            "  color: %2;"
+            "  background: %3;"
+            "}"
+            "QPushButton:hover { background: rgba(128,128,128,50); }"
+        ).arg(mid, text, bg));
+    };
+    applyHeaderStyle();
+    QObject::connect(qApp, &QApplication::paletteChanged,
+                     header_, [applyHeaderStyle](const QPalette&) { applyHeaderStyle(); });
 
     body_ = new QFrame;
     body_->setFrameShape(QFrame::NoFrame);
@@ -31,19 +50,7 @@ CollapsibleSection::CollapsibleSection(const QString& title, QWidget* parent)
     mainLayout->addWidget(header_);
     mainLayout->addWidget(body_);
 
-    // Animation: drive maximumHeight on the body frame
-    animation_.setTargetObject(body_);
-    animation_.setPropertyName("maximumHeight");
-    animation_.setDuration(160);
-    animation_.setEasingCurve(QEasingCurve::InOutQuad);
-
-    // When expand animation finishes, release the height cap
-    connect(&animation_, &QPropertyAnimation::finished, this, [this]() {
-        if (expanded_)
-            body_->setMaximumHeight(QWIDGETSIZE_MAX);
-        else
-            body_->hide();
-    });
+    updateChevron();
 }
 
 void CollapsibleSection::setContentWidget(QWidget* widget) {
@@ -53,25 +60,8 @@ void CollapsibleSection::setContentWidget(QWidget* widget) {
 void CollapsibleSection::setExpanded(bool expanded) {
     if (expanded_ == expanded) return;
     expanded_ = expanded;
+    body_->setVisible(expanded_);
     updateChevron();
-
-    animation_.stop();
-
-    if (expanded) {
-        // Show first so sizeHint() is valid, then animate height from 0
-        body_->setMaximumHeight(0);
-        body_->show();
-        int target = body_->sizeHint().height();
-        if (target <= 0) target = 300; // fallback
-        animation_.setStartValue(0);
-        animation_.setEndValue(target);
-    } else {
-        // Animate from current height to 0, then hide
-        animation_.setStartValue(body_->height());
-        animation_.setEndValue(0);
-    }
-
-    animation_.start();
     emit expandedChanged(expanded_);
 }
 
@@ -80,13 +70,5 @@ void CollapsibleSection::toggleExpanded() {
 }
 
 void CollapsibleSection::updateChevron() {
-    header_->setArrowType(expanded_ ? Qt::DownArrow : Qt::RightArrow);
-}
-
-int CollapsibleSection::bodyHeight() const {
-    return body_->maximumHeight();
-}
-
-void CollapsibleSection::setBodyHeight(int h) {
-    body_->setMaximumHeight(h);
+    header_->setText((expanded_ ? "▼  " : "▶  ") + title_);
 }

@@ -6,12 +6,22 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 
-list(APPEND CMAKE_PREFIX_PATH "/opt/homebrew/opt/qtbase")
+list(APPEND CMAKE_PREFIX_PATH "/opt/homebrew/opt/qtbase" "/opt/homebrew/opt/qtsvg")
+set(Qt6Svg_DIR "/opt/homebrew/opt/qtsvg/lib/cmake/Qt6Svg" CACHE PATH "")
 
-find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Network Concurrent)
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Network Concurrent Svg)
 find_package(OpenCV REQUIRED COMPONENTS core calib3d imgproc)
 
+include(FetchContent)
+FetchContent_Declare(
+    qlementine
+    GIT_REPOSITORY https://github.com/oclero/qlementine.git
+    GIT_TAG v1.4.2
+)
+FetchContent_MakeAvailable(qlementine)
+
 set(SOURCES
+    src/resources.qrc
     src/main.cpp
     src/MainWindow.cpp
     src/VideoWidget.cpp
@@ -105,6 +115,7 @@ target_link_libraries(mouse-posi PRIVATE
     Qt6::Network
     Qt6::Concurrent
     ${OpenCV_LIBS}
+    qlementine
 )
 
 if(NDI_FOUND)

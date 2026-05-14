@@ -58,7 +58,7 @@ CalibrationPanel::CalibrationPanel(VideoWidget* video, NdiReceiver* ndi,
 
     errorLabel_ = new QLabel("No calibration.");
     errorLabel_->setWordWrap(true);
-    errorLabel_->setStyleSheet("color: palette(mid); font-size: 11px;");
+    errorLabel_->setStyleSheet("color: palette(brightText); font-size: 11px;");
     layout->addWidget(errorLabel_);
 
     auto* resetBtn = new QPushButton("Reset Calibration");

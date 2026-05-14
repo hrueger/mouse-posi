@@ -2,7 +2,6 @@
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QFormLayout>
-#include <QGroupBox>
 #include <QLineEdit>
 #include <QListWidget>
 #include <QPushButton>
@@ -19,7 +18,7 @@ SessionPanel::SessionPanel(SessionManager* mgr, QWidget* parent)
 
     statusLabel_ = new QLabel("No active session.");
     statusLabel_->setWordWrap(true);
-    statusLabel_->setStyleSheet("color: palette(mid); font-size: 11px;");
+    statusLabel_->setStyleSheet("color: palette(placeholderText); font-size: 11px;");
     layout->addWidget(statusLabel_);
 
     stack_ = new QStackedWidget;
@@ -28,30 +27,32 @@ SessionPanel::SessionPanel(SessionManager* mgr, QWidget* parent)
     auto* idlePage = new QWidget;
     auto* idleLayout = new QVBoxLayout(idlePage);
     idleLayout->setContentsMargins(0, 0, 0, 0);
+    idleLayout->setSpacing(4);
 
-    auto* hostGroup = new QGroupBox("Host a Session");
-    auto* hostFL    = new QFormLayout(hostGroup);
+    auto* hostFL = new QFormLayout;
+    hostFL->setContentsMargins(0, 0, 0, 0);
+    hostFL->setSpacing(4);
     sessionNameEdit_ = new QLineEdit("My Session");
+    sessionNameEdit_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
     peerNameEdit_    = new QLineEdit;
-    // Pre-fill peer name from settings
+    peerNameEdit_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
     QSettings s("mouse-posi", "mouse-posi");
     peerNameEdit_->setText(s.value("peerName", "Station 1").toString());
-    hostFL->addRow("Session name:", sessionNameEdit_);
-    hostFL->addRow("My name:",      peerNameEdit_);
+    hostFL->addRow("Session:", sessionNameEdit_);
+    hostFL->addRow("My name:", peerNameEdit_);
+    idleLayout->addLayout(hostFL);
     hostBtn_ = new QPushButton("Start Hosting");
-    hostFL->addRow(hostBtn_);
-    idleLayout->addWidget(hostGroup);
+    idleLayout->addWidget(hostBtn_);
 
-    auto* joinGroup = new QGroupBox("Join a Session");
-    auto* joinLayout = new QVBoxLayout(joinGroup);
+    idleLayout->addSpacing(6);
+    idleLayout->addWidget(new QLabel("Sessions:"));
     sessionsView_ = new QListWidget;
+    sessionsView_->setMinimumWidth(0);
     sessionsView_->setMaximumHeight(100);
     joinBtn_ = new QPushButton("Join Selected");
     joinBtn_->setEnabled(false);
-    joinLayout->addWidget(new QLabel("Discovered sessions:"));
-    joinLayout->addWidget(sessionsView_);
-    joinLayout->addWidget(joinBtn_);
-    idleLayout->addWidget(joinGroup);
+    idleLayout->addWidget(sessionsView_);
+    idleLayout->addWidget(joinBtn_);
 
     idleLayout->addStretch();
     stack_->addWidget(idlePage);  // index 0
@@ -61,6 +62,7 @@ SessionPanel::SessionPanel(SessionManager* mgr, QWidget* parent)
     auto* hostPageLayout = new QVBoxLayout(hostPage);
     hostPageLayout->setContentsMargins(0, 0, 0, 0);
     peersView_ = new QListWidget;
+    peersView_->setMinimumWidth(0);
     peersView_->setMaximumHeight(120);
     stopBtn_ = new QPushButton("Stop Hosting");
     hostPageLayout->addWidget(new QLabel("Connected peers:"));

@@ -16,6 +16,7 @@
 #include <QMenuBar>
 #include <QStatusBar>
 #include <QHBoxLayout>
+#include <QSplitter>
 #include <QWidget>
 #include <QCloseEvent>
 #include <QFileDialog>
@@ -43,19 +44,19 @@ MainWindow::MainWindow(NdiReceiver* ndi, QWidget* parent) : QMainWindow(parent) 
     resize(1440, 810);
 
     // ── Central layout: video + sidebar ──────────────────────────────────
-    auto* central = new QWidget;
-    auto* layout  = new QHBoxLayout(central);
-    layout->setContentsMargins(0, 0, 0, 0);
-    layout->setSpacing(0);
-
     video_ = new VideoWidget;
     video_->setCalibration(&calibration_);
 
     sidebar_ = new SidebarWidget;
 
-    layout->addWidget(video_, 1);
-    layout->addWidget(sidebar_, 0);
-    setCentralWidget(central);
+    auto* splitter = new QSplitter(Qt::Horizontal);
+    splitter->setChildrenCollapsible(false);
+    splitter->addWidget(video_);
+    splitter->addWidget(sidebar_);
+    splitter->setStretchFactor(0, 1);
+    splitter->setStretchFactor(1, 0);
+    splitter->setSizes({1160, 280});
+    setCentralWidget(splitter);
 
     // ── Sidebar panels ────────────────────────────────────────────────────
     ndi_         = ndi;
@@ -79,17 +80,30 @@ MainWindow::MainWindow(NdiReceiver* ndi, QWidget* parent) : QMainWindow(parent) 
     sidebar_->addPanel("Stats",           statsPanel_,       false);
 
     // ── Status bar ────────────────────────────────────────────────────────
+    auto makeSep = []() {
+        auto* line = new QFrame;
+        line->setFrameShape(QFrame::VLine);
+        line->setFrameShadow(QFrame::Plain);
+        line->setFixedWidth(1);
+        line->setFixedHeight(14);
+        line->setStyleSheet("color: palette(mid);");
+        return line;
+    };
+
     statusTracker_ = new QLabel("No tracker — press 1–9 to select");
     statusNdi_     = new QLabel("No NDI source");
     statusPos_     = new QLabel("--");
+    statusTracker_->setContentsMargins(4, 0, 8, 0);
+    statusNdi_->setContentsMargins(8, 0, 8, 0);
+    statusPos_->setContentsMargins(8, 0, 4, 0);
     statusBar()->addWidget(statusTracker_);
-    statusBar()->addWidget(new QLabel("  |  "));
+    statusBar()->addWidget(makeSep());
     statusBar()->addWidget(statusNdi_);
-    statusBar()->addWidget(new QLabel("  |  "));
+    statusBar()->addWidget(makeSep());
     statusBar()->addWidget(statusPos_);
 
     statusPsnOut_ = new QLabel("● PSN Out");
-    statusPsnOut_->setStyleSheet("color: #cc3333; padding: 0 4px;");
+    statusPsnOut_->setStyleSheet("color: #cc3333; padding: 0 8px;");
     statusBar()->addPermanentWidget(statusPsnOut_);
 
     statusSession_ = new QLabel;
@@ -97,8 +111,9 @@ MainWindow::MainWindow(NdiReceiver* ndi, QWidget* parent) : QMainWindow(parent) 
     leaveSessionBtn_->setFlat(true);
     leaveSessionBtn_->setStyleSheet(
         "QPushButton { border: 1px solid palette(mid); border-radius: 3px;"
-        " padding: 1px 8px; margin: 1px 2px; }"
-        "QPushButton:hover { background: palette(button); }");
+        " padding: 1px 8px; margin: 1px 2px;"
+        " color: palette(windowText); background: transparent; }"
+        "QPushButton:hover { background: rgba(128,128,128,40); }");
     leaveSessionBtn_->setVisible(false);
     connect(leaveSessionBtn_, &QPushButton::clicked, this, [this]() {
         if (QMessageBox::question(this, "Leave Session",

@@ -79,7 +79,7 @@ TrackersPanel::TrackersPanel(QWidget* parent) : QWidget(parent) {
     layout->setSpacing(4);
 
     auto* hint = new QLabel("Press 1–9 to select");
-    hint->setStyleSheet("color: palette(mid); font-size: 11px;");
+    hint->setStyleSheet("color: palette(placeholderText); font-size: 11px;");
     layout->addWidget(hint);
 
     list_ = new QListWidget;
@@ -92,8 +92,8 @@ TrackersPanel::TrackersPanel(QWidget* parent) : QWidget(parent) {
     addBtn_    = new QPushButton("+");
     removeBtn_ = new QPushButton("−");
     editBtn_   = new QPushButton("Edit…");
-    addBtn_->setFixedWidth(28);
-    removeBtn_->setFixedWidth(28);
+    addBtn_->setFixedHeight(28);
+    removeBtn_->setFixedHeight(28);
     addBtn_->setToolTip("Add tracker");
     removeBtn_->setToolTip("Remove selected tracker");
     editBtn_->setToolTip("Edit selected tracker");

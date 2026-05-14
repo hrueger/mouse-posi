@@ -1,53 +1,53 @@
 #include "NetworkSettingsPanel.h"
 #include <QVBoxLayout>
 #include <QFormLayout>
-#include <QGroupBox>
 #include <QRadioButton>
 #include <QLineEdit>
 #include <QSpinBox>
 #include <QComboBox>
-#include <QLabel>
 #include <QNetworkInterface>
 
 NetworkSettingsPanel::NetworkSettingsPanel(QWidget* parent) : QWidget(parent) {
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
-    layout->setSpacing(6);
+    layout->setSpacing(4);
 
-    // PSN mode
-    auto* modeGroup = new QGroupBox("PSN Output Mode");
-    auto* modeLayout = new QVBoxLayout(modeGroup);
     multicastRadio_ = new QRadioButton("Multicast (recommended)");
     unicastRadio_   = new QRadioButton("Unicast");
     broadcastRadio_ = new QRadioButton("Broadcast");
     multicastRadio_->setChecked(true);
-    modeLayout->addWidget(multicastRadio_);
-    modeLayout->addWidget(unicastRadio_);
-    modeLayout->addWidget(broadcastRadio_);
-    layout->addWidget(modeGroup);
+    for (auto* r : {multicastRadio_, unicastRadio_, broadcastRadio_})
+        r->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+    layout->addWidget(multicastRadio_);
+    layout->addWidget(unicastRadio_);
+    layout->addWidget(broadcastRadio_);
 
-    // IP / port fields
     auto* fl = new QFormLayout;
+    fl->setContentsMargins(0, 4, 0, 0);
+    fl->setSpacing(4);
     multicastIpEdit_ = new QLineEdit("236.10.10.10");
     unicastIpEdit_   = new QLineEdit;
     broadcastIpEdit_ = new QLineEdit("255.255.255.255");
+    for (auto* e : {multicastIpEdit_, unicastIpEdit_, broadcastIpEdit_})
+        e->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
     portSpin_        = new QSpinBox;
+    portSpin_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
     portSpin_->setRange(1, 65535);
     portSpin_->setValue(56565);
     fl->addRow("Multicast IP:", multicastIpEdit_);
     fl->addRow("Unicast IP:",   unicastIpEdit_);
     fl->addRow("Broadcast IP:", broadcastIpEdit_);
     fl->addRow("Port:",         portSpin_);
-    layout->addLayout(fl);
 
-    // Interface selectors
-    auto* ifGroup = new QGroupBox("Network Interfaces");
-    auto* ifLayout = new QFormLayout(ifGroup);
     psnIfaceCombo_     = new QComboBox;
+    psnIfaceCombo_->setMinimumContentsLength(0);
+    psnIfaceCombo_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     sessionIfaceCombo_ = new QComboBox;
-    ifLayout->addRow("PSN Interface:",     psnIfaceCombo_);
-    ifLayout->addRow("Session Interface:", sessionIfaceCombo_);
-    layout->addWidget(ifGroup);
+    sessionIfaceCombo_->setMinimumContentsLength(0);
+    sessionIfaceCombo_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    fl->addRow("PSN iface:",     psnIfaceCombo_);
+    fl->addRow("Session iface:", sessionIfaceCombo_);
+    layout->addLayout(fl);
 
     populateInterfaces();
 
