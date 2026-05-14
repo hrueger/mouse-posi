@@ -217,7 +217,7 @@ MainWindow::MainWindow(NdiReceiver* ndi, QWidget* parent) : QMainWindow(parent) 
             if (id >= 0) {
                 QPointF s = calibration_.pixelToStage(framePt);
                 trackerPositions_[id] = {float(s.x()), float(s.y())};
-                statusPos_->setText(QString("X: %1m  Z: %2m")
+                statusPos_->setText(QString("X: %1m  Y: %2m")
                     .arg(s.x(), 0, 'f', 2).arg(s.y(), 0, 'f', 2));
                 log(QString("DRAG  tracker=%1  frame=(%2,%3)  stage=(%4,%5)")
                     .arg(id)
@@ -232,7 +232,7 @@ MainWindow::MainWindow(NdiReceiver* ndi, QWidget* parent) : QMainWindow(parent) 
         if (id < 0) return;
         QPointF s = calibration_.pixelToStage(framePt);
         trackerPositions_[id] = {float(s.x()), float(s.y())};
-        statusPos_->setText(QString("X: %1m  Z: %2m")
+        statusPos_->setText(QString("X: %1m  Y: %2m")
             .arg(s.x(), 0, 'f', 2).arg(s.y(), 0, 'f', 2));
         log(QString("CLICK tracker=%1  frame=(%2,%3)  stage=(%4,%5)")
             .arg(id)

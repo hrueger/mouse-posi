@@ -201,7 +201,7 @@ QWidget* CalibrationPanel::buildRectPage() {
     rectWSpin_->setRange(0.1, 9999); rectWSpin_->setValue(10.0);
     rectWSpin_->setDecimals(2); rectWSpin_->setSingleStep(0.5);
     dl->addWidget(rectWSpin_, 0, 1);
-    dl->addWidget(new QLabel("Height Z (m):"), 1, 0);
+    dl->addWidget(new QLabel("Depth Y (m):"), 1, 0);
     rectHSpin_ = new QDoubleSpinBox;
     rectHSpin_->setRange(0.1, 9999); rectHSpin_->setValue(8.0);
     rectHSpin_->setDecimals(2); rectHSpin_->setSingleStep(0.5);
@@ -245,7 +245,7 @@ QWidget* CalibrationPanel::buildManualPage() {
     l->setContentsMargins(0, 0, 0, 0);
 
     l->addWidget(new QLabel(
-        "<small>Click 4+ points, enter their stage (X, Z) coords.</small>"));
+        "<small>Click 4+ points, enter their stage (X, Y) coords.</small>"));
 
     manualStatusLabel_ = new QLabel;
     manualStatusLabel_->setWordWrap(true);
@@ -322,7 +322,7 @@ void CalibrationPanel::buildPointOverlay() {
     };
 
     overlaySXRow_ = mkRow("Stage X (m):", overlaySX_, 1);
-    overlaySZRow_ = mkRow("Stage Z (m):", overlaySZ_, 2);
+    overlaySZRow_ = mkRow("Stage Y (m):", overlaySZ_, 2);
 
     pointOverlay_->adjustSize();
     pointOverlay_->hide();
@@ -424,7 +424,7 @@ void CalibrationPanel::updateRectOverlay() {
 void CalibrationPanel::updateRectStepRows() {
     double w = rectWSpin_->value();
     double h = rectHSpin_->value();
-    const char* names[4] = {"Origin", "X-corner", "Z-corner", "Diagonal"};
+    const char* names[4] = {"Origin", "X-corner", "Y-corner", "Diagonal"};
     const char* syms[4]  = {"\xe2\x91\xa0","\xe2\x91\xa1","\xe2\x91\xa2","\xe2\x91\xa3"};
     QStringList coords = {
         "(0, 0)",
@@ -495,7 +495,7 @@ void CalibrationPanel::updateManualList() {
         manualList_->addItem(item);
     }
     for (int i = 0; i < imagePoints_.size(); ++i)
-        manualList_->addItem(QString("\xe2\x97\x8f P%1  X:%2  Z:%3")
+        manualList_->addItem(QString("\xe2\x97\x8f P%1  X:%2  Y:%3")
             .arg(i + 1)
             .arg(stagePoints_[i].x(), 0, 'f', 2)
             .arg(stagePoints_[i].y(), 0, 'f', 2));
@@ -513,7 +513,7 @@ void CalibrationPanel::updateManualOverlay() {
     QList<QString> labels;
     for (auto& s : stagePoints_)
         labels << ((s.x() == 0.0 && s.y() == 0.0)
-                   ? QString() : QString("X:%1 Z:%2").arg(s.x(),0,'f',2).arg(s.y(),0,'f',2));
+                   ? QString() : QString("X:%1 Y:%2").arg(s.x(),0,'f',2).arg(s.y(),0,'f',2));
     video_->setCalibDistanceLabels(labels);
 }
 
@@ -713,7 +713,7 @@ void CalibrationPanel::onTest(bool checked) {
 void CalibrationPanel::onMousePosInFrame(QPointF imagePos) {
     if (!testMode_ || !previewCal_->isValid()) return;
     QPointF s = previewCal_->pixelToStage(imagePos);
-    errorLabel_->setText(QString("X=%1m  Z=%2m")
+    errorLabel_->setText(QString("X=%1m  Y=%2m")
         .arg(s.x(), 0, 'f', 3).arg(s.y(), 0, 'f', 3));
 }
 

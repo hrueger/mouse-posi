@@ -171,19 +171,19 @@ void VideoWidget::drawAxisLegend(QPainter& p) const {
     const double axLen = 24;
 
     QPointF xDir(axLen, 0);  // default: +X right
-    QPointF zDir(0, -axLen); // default: +Z up
+    QPointF yDir(0, -axLen); // default: +Y up
 
     if (calibration_ && calibration_->isValid()) {
         // Compute actual pixel directions from calibration
         QPointF o  = frameToWidget(calibration_->stageToPixel(0, 0));
         QPointF xp = frameToWidget(calibration_->stageToPixel(1, 0));
-        QPointF zp = frameToWidget(calibration_->stageToPixel(0, 1));
+        QPointF yp = frameToWidget(calibration_->stageToPixel(0, 1));
         QPointF xd = xp - o;
-        QPointF zd = zp - o;
+        QPointF yd = yp - o;
         double xl = std::sqrt(xd.x()*xd.x() + xd.y()*xd.y());
-        double zl = std::sqrt(zd.x()*zd.x() + zd.y()*zd.y());
+        double yl = std::sqrt(yd.x()*yd.x() + yd.y()*yd.y());
         if (xl > 0.1) xDir = xd / xl * axLen;
-        if (zl > 0.1) zDir = zd / zl * axLen;
+        if (yl > 0.1) yDir = yd / yl * axLen;
     }
 
     // X axis — green
@@ -192,11 +192,11 @@ void VideoWidget::drawAxisLegend(QPainter& p) const {
     p.setFont(QFont("Arial", 8, QFont::Bold));
     p.drawText(axO + xDir + QPointF(3, 4), "+X");
 
-    // Z axis — cornflower blue
+    // Y axis — cornflower blue
     p.setPen(QPen(QColor(100, 160, 255), 2));
-    drawArrow(p, axO, axO + zDir, 6);
-    QPointF zLabelOff = zDir + QPointF(zDir.x() > 0 ? 3 : -22, zDir.y() > 0 ? 10 : -3);
-    p.drawText(axO + zLabelOff, "+Z");
+    drawArrow(p, axO, axO + yDir, 6);
+    QPointF yLabelOff = yDir + QPointF(yDir.x() > 0 ? 3 : -22, yDir.y() > 0 ? 10 : -3);
+    p.drawText(axO + yLabelOff, "+Y");
 
     // Dot at axis origin
     p.setPen(Qt::NoPen);
