@@ -2,6 +2,7 @@
 #include <QWidget>
 #include "Project.h"
 
+class QFormLayout;
 class QRadioButton;
 class QLineEdit;
 class QSpinBox;
@@ -20,8 +21,9 @@ signals:
 
 private:
     void populateInterfaces();
-    void onModeChanged();
+    void updateIpFieldVisibility();
 
+    QFormLayout*  formLayout_;
     QRadioButton* multicastRadio_;
     QRadioButton* unicastRadio_;
     QRadioButton* broadcastRadio_;

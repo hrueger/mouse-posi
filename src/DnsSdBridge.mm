@@ -32,19 +32,16 @@
 
 - (void)netServiceBrowserWillSearch:(NSNetServiceBrowser*)browser {
     Q_UNUSED(browser)
-    NSLog(@"[DnsSd] browser will search");
 }
 
 - (void)netServiceBrowserDidStopSearch:(NSNetServiceBrowser*)browser {
     Q_UNUSED(browser)
-    NSLog(@"[DnsSd] browser stopped search");
 }
 
 - (void)netServiceBrowser:(NSNetServiceBrowser*)browser
          didNotSearch:(NSDictionary*)errorDict
 {
-    Q_UNUSED(browser)
-    NSLog(@"[DnsSd] browser didNotSearch: %@", errorDict);
+    Q_UNUSED(browser) Q_UNUSED(errorDict)
 }
 
 - (void)netServiceBrowser:(NSNetServiceBrowser*)browser
@@ -52,8 +49,6 @@
                moreComing:(BOOL)moreComing
 {
     Q_UNUSED(browser) Q_UNUSED(moreComing)
-    NSLog(@"[DnsSd] found service: %@ type: %@ domain: %@",
-          service.name, service.type, service.domain);
     service.delegate = self;
     [service scheduleInRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
     [self.resolving addObject:service];
@@ -65,13 +60,10 @@
                moreComing:(BOOL)moreComing
 {
     Q_UNUSED(browser) Q_UNUSED(moreComing)
-    NSLog(@"[DnsSd] lost service: %@", service.name);
     emit self.bridge->serviceLost(QString::fromNSString(service.name));
 }
 
 - (void)netServiceDidResolveAddress:(NSNetService*)service {
-    NSLog(@"[DnsSd] resolved: %@ host: %@ port: %d",
-          service.name, service.hostName, (int)service.port);
     [self.resolving removeObject:service];
     QString name = QString::fromNSString(service.name);
     QString host = QString::fromNSString(service.hostName);
@@ -80,7 +72,7 @@
 }
 
 - (void)netService:(NSNetService*)service didNotResolve:(NSDictionary*)error {
-    NSLog(@"[DnsSd] did NOT resolve: %@ error: %@", service.name, error);
+    Q_UNUSED(error)
     [self.resolving removeObject:service];
 }
 

@@ -6,6 +6,7 @@
 #include <QSpinBox>
 #include <QComboBox>
 #include <QNetworkInterface>
+#include <QAbstractSocket>
 
 NetworkSettingsPanel::NetworkSettingsPanel(QWidget* parent) : QWidget(parent) {
     auto* layout = new QVBoxLayout(this);
@@ -22,9 +23,9 @@ NetworkSettingsPanel::NetworkSettingsPanel(QWidget* parent) : QWidget(parent) {
     layout->addWidget(unicastRadio_);
     layout->addWidget(broadcastRadio_);
 
-    auto* fl = new QFormLayout;
-    fl->setContentsMargins(0, 4, 0, 0);
-    fl->setSpacing(4);
+    formLayout_ = new QFormLayout;
+    formLayout_->setContentsMargins(0, 4, 0, 0);
+    formLayout_->setSpacing(4);
     multicastIpEdit_ = new QLineEdit("236.10.10.10");
     unicastIpEdit_   = new QLineEdit;
     broadcastIpEdit_ = new QLineEdit("255.255.255.255");
@@ -34,10 +35,10 @@ NetworkSettingsPanel::NetworkSettingsPanel(QWidget* parent) : QWidget(parent) {
     portSpin_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
     portSpin_->setRange(1, 65535);
     portSpin_->setValue(56565);
-    fl->addRow("Multicast IP:", multicastIpEdit_);
-    fl->addRow("Unicast IP:",   unicastIpEdit_);
-    fl->addRow("Broadcast IP:", broadcastIpEdit_);
-    fl->addRow("Port:",         portSpin_);
+    formLayout_->addRow("Multicast IP:", multicastIpEdit_);  // row 0
+    formLayout_->addRow("Unicast IP:",   unicastIpEdit_);    // row 1
+    formLayout_->addRow("Broadcast IP:", broadcastIpEdit_);  // row 2
+    formLayout_->addRow("Port:",         portSpin_);
 
     psnIfaceCombo_     = new QComboBox;
     psnIfaceCombo_->setMinimumContentsLength(0);
@@ -45,16 +46,17 @@ NetworkSettingsPanel::NetworkSettingsPanel(QWidget* parent) : QWidget(parent) {
     sessionIfaceCombo_ = new QComboBox;
     sessionIfaceCombo_->setMinimumContentsLength(0);
     sessionIfaceCombo_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    fl->addRow("PSN iface:",     psnIfaceCombo_);
-    fl->addRow("Session iface:", sessionIfaceCombo_);
-    layout->addLayout(fl);
+    formLayout_->addRow("PSN iface:",     psnIfaceCombo_);
+    formLayout_->addRow("Session iface:", sessionIfaceCombo_);
+    layout->addLayout(formLayout_);
 
     populateInterfaces();
+    updateIpFieldVisibility();
 
     auto emitChange = [this]() { emit configChanged(config()); };
-    connect(multicastRadio_,  &QRadioButton::toggled, this, emitChange);
-    connect(unicastRadio_,    &QRadioButton::toggled, this, emitChange);
-    connect(broadcastRadio_,  &QRadioButton::toggled, this, emitChange);
+    connect(multicastRadio_,  &QRadioButton::toggled, this, [this, emitChange]{ updateIpFieldVisibility(); emitChange(); });
+    connect(unicastRadio_,    &QRadioButton::toggled, this, [this, emitChange]{ updateIpFieldVisibility(); emitChange(); });
+    connect(broadcastRadio_,  &QRadioButton::toggled, this, [this, emitChange]{ updateIpFieldVisibility(); emitChange(); });
     connect(multicastIpEdit_, &QLineEdit::editingFinished, this, emitChange);
     connect(unicastIpEdit_,   &QLineEdit::editingFinished, this, emitChange);
     connect(broadcastIpEdit_, &QLineEdit::editingFinished, this, emitChange);
@@ -72,13 +74,29 @@ void NetworkSettingsPanel::populateInterfaces() {
     addDefaultItem(psnIfaceCombo_);
     addDefaultItem(sessionIfaceCombo_);
     for (const auto& iface : QNetworkInterface::allInterfaces()) {
-        if (iface.flags().testFlag(QNetworkInterface::IsUp) &&
-            !iface.flags().testFlag(QNetworkInterface::IsLoopBack))
-        {
-            psnIfaceCombo_->addItem(iface.humanReadableName(), iface.name());
-            sessionIfaceCombo_->addItem(iface.humanReadableName(), iface.name());
+        if (!iface.flags().testFlag(QNetworkInterface::IsUp))
+            continue;
+
+        QString ipv4;
+        for (const auto& entry : iface.addressEntries()) {
+            if (entry.ip().protocol() == QAbstractSocket::IPv4Protocol) {
+                ipv4 = entry.ip().toString();
+                break;
+            }
         }
+        if (ipv4.isEmpty())
+            continue;
+
+        QString label = iface.humanReadableName() + " — " + ipv4;
+        psnIfaceCombo_->addItem(label, iface.name());
+        sessionIfaceCombo_->addItem(label, iface.name());
     }
+}
+
+void NetworkSettingsPanel::updateIpFieldVisibility() {
+    formLayout_->setRowVisible(0, multicastRadio_->isChecked());
+    formLayout_->setRowVisible(1, unicastRadio_->isChecked());
+    formLayout_->setRowVisible(2, broadcastRadio_->isChecked());
 }
 
 void NetworkSettingsPanel::setConfig(const NetworkConfig& cfg) {
