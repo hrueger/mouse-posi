@@ -3,6 +3,7 @@
 #include <QImage>
 #include <QStringList>
 #include <QMutex>
+#include <QFuture>
 #include <atomic>
 
 class NdiReceiver : public QThread {
@@ -28,4 +29,5 @@ private:
     QString          targetSource_;
     std::atomic_bool running_{false};
     std::atomic_bool reconnect_{false};
+    QFuture<void>    discoveryFuture_;
 };

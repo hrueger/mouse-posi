@@ -10,6 +10,7 @@ NdiReceiver::NdiReceiver(QObject* parent) : QThread(parent) {}
 
 NdiReceiver::~NdiReceiver() {
     stop();
+    discoveryFuture_.waitForFinished();
     wait();
 }
 
@@ -20,7 +21,7 @@ void NdiReceiver::stop() {
 void NdiReceiver::discoverSources() {
 #if NDI_AVAILABLE
     // Run discovery off the UI thread so the dialog stays responsive
-    QtConcurrent::run([this]() {
+    discoveryFuture_ = QtConcurrent::run([this]() {
         if (!NDIlib_initialize()) return;
         NDIlib_find_instance_t finder = NDIlib_find_create_v2(nullptr);
         if (!finder) return;
