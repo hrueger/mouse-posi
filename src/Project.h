@@ -2,6 +2,7 @@
 #include <QString>
 #include <QColor>
 #include <QList>
+#include <QMap>
 #include <QPointF>
 
 struct TrackerConfig {
@@ -30,11 +31,13 @@ struct NetworkConfig {
 };
 
 struct Project {
-    QString          name       = QStringLiteral("New Project");
-    QString          ndiSource;
+    QString              ndiSource;
     QList<TrackerConfig> trackers;
-    CalibrationData  calibration;
-    NetworkConfig    network;
+    CalibrationData      calibration;
+    NetworkConfig        network;
+    // Per-station tracker assignments: stationName -> list of assigned tracker IDs.
+    // Populated by the host and persisted so rejoining stations get their last config.
+    QMap<QString, QList<int>> stationTrackers;
 
     static Project   load(const QString& path);
     void             save(const QString& path) const;

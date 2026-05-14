@@ -101,6 +101,8 @@ SessionPanel::SessionPanel(SessionManager* mgr, QWidget* parent)
         auto disc = item->data(Qt::UserRole).value<DiscoveredSession>();
         QString peer = peerNameEdit_->text().trimmed();
         if (peer.isEmpty()) peer = "Station 1";
+        QSettings s("mouse-posi", "mouse-posi");
+        s.setValue("peerName", peer);
         mgr_->joinSession(disc.host, disc.port, peer);
     });
     connect(sessionsView_, &QListWidget::itemSelectionChanged, this, [this]() {

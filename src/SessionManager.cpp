@@ -37,7 +37,6 @@ SessionManager::SessionManager(QObject* parent) : QObject(parent) {
 
     connect(dns_, &DnsSdBridge::serviceFound,
             this, [this](QString name, QString host, quint16 port) {
-        qDebug() << "[SessionManager] serviceFound" << name << host << port;
         for (auto& d : discovered_) {
             if (d.name == name) { d.host = host; d.port = port;
                 emit browsedSessionsChanged(discovered_); return; }
@@ -424,7 +423,6 @@ void SessionManager::broadcastPeerList() {
 
 QJsonObject SessionManager::projectToJson(const Project& p) const {
     QJsonObject obj;
-    obj["name"]      = p.name;
     obj["ndiSource"] = p.ndiSource;
     QJsonArray trackers;
     for (const auto& t : p.trackers) {
@@ -459,7 +457,6 @@ QJsonObject SessionManager::projectToJson(const Project& p) const {
 
 Project SessionManager::projectFromJson(const QJsonObject& obj) const {
     Project p;
-    p.name      = obj["name"].toString();
     p.ndiSource = obj["ndiSource"].toString();
     for (auto v : obj["trackers"].toArray()) {
         auto to = v.toObject();

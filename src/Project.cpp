@@ -3,6 +3,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonArray>
+#include <stdexcept>
 
 Project Project::defaultProject() {
     Project p;
@@ -13,6 +14,18 @@ Project Project::defaultProject() {
         {4, "Spot 4", QColor(255, 200, 60)},
     };
     return p;
+}
+
+static QJsonArray intListToJson(const QList<int>& ids) {
+    QJsonArray arr;
+    for (int id : ids) arr << id;
+    return arr;
+}
+
+static QList<int> jsonToIntList(const QJsonArray& arr) {
+    QList<int> ids;
+    for (const auto& v : arr) ids << v.toInt();
+    return ids;
 }
 
 static QJsonArray pointListToJson(const QList<QPointF>& pts) {
@@ -37,11 +50,17 @@ static QList<QPointF> jsonToPointList(const QJsonArray& arr) {
 Project Project::load(const QString& path) {
     QFile f(path);
     if (!f.open(QIODevice::ReadOnly))
-        return defaultProject();
-    QJsonObject root = QJsonDocument::fromJson(f.readAll()).object();
+        throw std::runtime_error("Cannot open file: " + path.toStdString());
+
+    QJsonParseError parseErr;
+    QJsonDocument doc = QJsonDocument::fromJson(f.readAll(), &parseErr);
+    if (doc.isNull() || !doc.isObject())
+        throw std::runtime_error("Invalid showfile (JSON parse error): "
+                                 + parseErr.errorString().toStdString());
+
+    QJsonObject root = doc.object();
 
     Project p;
-    p.name      = root["name"].toString("New Project");
     p.ndiSource = root["ndiSource"].toString();
 
     p.trackers.clear();
@@ -51,6 +70,7 @@ Project Project::load(const QString& path) {
         t.id    = to["id"].toInt(1);
         t.name  = to["name"].toString();
         t.color = QColor(to["color"].toString("#ff5050"));
+        if (!t.color.isValid()) t.color = QColor(255, 80, 80);
         p.trackers << t;
     }
     if (p.trackers.isEmpty())
@@ -61,6 +81,12 @@ Project Project::load(const QString& path) {
     p.calibration.stagePoints = jsonToPointList(cal["stagePoints"].toArray());
     for (const auto& v : cal["homography"].toArray())
         p.calibration.homography << v.toDouble();
+
+    // Sanitize calibration: discard if point lists are mismatched or homography is wrong size
+    if (p.calibration.imagePoints.size() != p.calibration.stagePoints.size()
+        || (p.calibration.homography.size() != 9 && !p.calibration.homography.isEmpty())) {
+        p.calibration = {};
+    }
 
     QJsonObject net = root["network"].toObject();
     QString modeStr = net["mode"].toString("multicast");
@@ -74,12 +100,15 @@ Project Project::load(const QString& path) {
     p.network.psnInterface    = net["psnInterface"].toString();
     p.network.sessionInterface= net["sessionInterface"].toString();
 
+    QJsonObject stMap = root["stationTrackers"].toObject();
+    for (auto it = stMap.constBegin(); it != stMap.constEnd(); ++it)
+        p.stationTrackers[it.key()] = jsonToIntList(it.value().toArray());
+
     return p;
 }
 
 void Project::save(const QString& path) const {
     QJsonObject root;
-    root["name"]      = name;
     root["ndiSource"] = ndiSource;
 
     QJsonArray trackerArr;
@@ -113,6 +142,11 @@ void Project::save(const QString& path) const {
     net["psnInterface"]     = network.psnInterface;
     net["sessionInterface"] = network.sessionInterface;
     root["network"] = net;
+
+    QJsonObject stMap;
+    for (auto it = stationTrackers.constBegin(); it != stationTrackers.constEnd(); ++it)
+        stMap[it.key()] = intListToJson(it.value());
+    root["stationTrackers"] = stMap;
 
     QFile f(path);
     if (f.open(QIODevice::WriteOnly))

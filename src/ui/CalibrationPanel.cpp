@@ -541,7 +541,8 @@ void CalibrationPanel::updateComputeButton() {
 }
 
 void CalibrationPanel::loadExisting(const CalibrationData& data) {
-    if (data.imagePoints.size() < 4) {
+    if (data.imagePoints.size() < 4
+        || data.stagePoints.size() < data.imagePoints.size()) {
         updateManualStatus();
         if (data.isValid())
             errorLabel_->setText("Calibration valid.");

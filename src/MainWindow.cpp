@@ -39,6 +39,7 @@
 #include <QDateTime>
 #include <algorithm>
 #include <cmath>
+#include <stdexcept>
 
 namespace {
 static constexpr bool kEnableIncomingPsn = true;
@@ -173,6 +174,9 @@ MainWindow::MainWindow(NdiReceiver* ndi, QWidget* parent) : QMainWindow(parent) 
     connect(trackersPanel_, &TrackersPanel::trackerAccessChanged,
             this, [this](const QString& peerName, const QList<int>& ids) {
         sessionMgr_->setTrackerAccess(peerName, ids);
+        project_.stationTrackers[peerName] = ids;
+        if (!projectPath_.isEmpty())
+            project_.save(projectPath_);
     });
 
     connect(streamPanel_, &StreamSourcePanel::ndiSourceSelected, this, &MainWindow::setNdiSource);
@@ -257,7 +261,12 @@ MainWindow::MainWindow(NdiReceiver* ndi, QWidget* parent) : QMainWindow(parent) 
         updateTrackerBarRestriction();
         updateTrackersPanelPeers();
     });
-    connect(sessionMgr_, &SessionManager::peerJoined, this, [this](SessionPeer) {
+    connect(sessionMgr_, &SessionManager::peerJoined, this, [this](SessionPeer peer) {
+        // Auto-restore previously saved tracker assignment for this station
+        if (project_.stationTrackers.contains(peer.displayName)) {
+            const QList<int>& ids = project_.stationTrackers[peer.displayName];
+            sessionMgr_->setTrackerAccess(peer.displayName, ids);
+        }
         updateTrackersPanelPeers();
     });
     connect(sessionMgr_, &SessionManager::peerLeft, this, [this](QString) {
@@ -344,9 +353,16 @@ MainWindow::MainWindow(NdiReceiver* ndi, QWidget* parent) : QMainWindow(parent) 
         for (const auto& path : recentProjects()) {
             auto* a = recentMenu->addAction(path);
             connect(a, &QAction::triggered, this, [this, path]() {
-                projectPath_ = path;
-                loadProject(Project::load(path));
-                saveRecent(path);
+                try {
+                    Project p = Project::load(path);
+                    projectPath_ = path;
+                    loadProject(p);
+                    saveRecent(path);
+                } catch (const std::exception& e) {
+                    QMessageBox::critical(this, "Invalid Showfile",
+                        QString("Could not open \"%1\":\n\n%2")
+                            .arg(QFileInfo(path).fileName(), QString::fromStdString(e.what())));
+                }
             });
         }
     });
@@ -552,20 +568,11 @@ void MainWindow::applyProject() {
 
 void MainWindow::updateWindowTitle() {
     const QString base = QStringLiteral("mouse-posi");
-    const QString projectName = project_.name.isEmpty() ? QStringLiteral("New Project") : project_.name;
-
     if (projectPath_.isEmpty()) {
-        setWindowTitle(QString("%1 — %2").arg(base, projectName));
+        setWindowTitle(QString("%1 — Untitled").arg(base));
         return;
     }
-
-    const QString fileName = QFileInfo(projectPath_).fileName();
-    if (fileName.isEmpty()) {
-        setWindowTitle(QString("%1 — %2").arg(base, projectName));
-        return;
-    }
-
-    setWindowTitle(QString("%1 — %2 (%3)").arg(base, projectName, fileName));
+    setWindowTitle(QString("%1 — %2").arg(base, QFileInfo(projectPath_).fileName()));
 }
 
 void MainWindow::closeEvent(QCloseEvent* e) {
@@ -734,10 +741,17 @@ void MainWindow::onOpenProject() {
     QString path = QFileDialog::getOpenFileName(
         this, "Open Project", QDir::homePath(), "mouse-posi Projects (*.mposi)", nullptr, opts);
     if (path.isEmpty()) return;
-    projectPath_ = path;
-    loadProject(Project::load(path));
-    saveRecent(path);
-    updateWindowTitle();
+    try {
+        Project p = Project::load(path);
+        projectPath_ = path;
+        loadProject(p);
+        saveRecent(path);
+        updateWindowTitle();
+    } catch (const std::exception& e) {
+        QMessageBox::critical(this, "Invalid Showfile",
+            QString("Could not open \"%1\":\n\n%2")
+                .arg(QFileInfo(path).fileName(), QString::fromStdString(e.what())));
+    }
 }
 
 void MainWindow::onSaveProject() {
@@ -751,9 +765,11 @@ void MainWindow::onSaveProjectAs() {
 #ifdef Q_OS_MAC
     opts |= QFileDialog::DontUseNativeDialog;
 #endif
+    QString defaultName = projectPath_.isEmpty()
+        ? QDir::homePath() + "/Untitled.mposi"
+        : projectPath_;
     QString path = QFileDialog::getSaveFileName(
-        this, "Save Project",
-        QDir::homePath() + "/" + project_.name + ".mposi",
+        this, "Save Project", defaultName,
         "mouse-posi Projects (*.mposi)", nullptr, opts);
     if (path.isEmpty()) return;
     projectPath_ = path;
