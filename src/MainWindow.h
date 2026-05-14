@@ -1,0 +1,99 @@
+#pragma once
+#include <QMainWindow>
+#include <QTimer>
+#include <QLabel>
+#include <QMap>
+#include <QElapsedTimer>
+#include <QFile>
+#include <QTextStream>
+#include <QSize>
+#include <QtGlobal>
+#include "Project.h"
+#include "Calibration.h"
+
+class VideoWidget;
+class NdiReceiver;
+class PsnSender;
+class PsnReceiver;
+class SessionManager;
+class SidebarWidget;
+class TrackersPanel;
+class NdiPanel;
+class NetworkSettingsPanel;
+class StatsPanel;
+class CalibrationPanel;
+class SessionPanel;
+class CollapsibleSection;
+
+class MainWindow : public QMainWindow {
+    Q_OBJECT
+public:
+    explicit MainWindow(NdiReceiver* ndi, QWidget* parent = nullptr);
+    ~MainWindow() override;
+
+    void loadProject(const Project& p);
+    void setNdiSource(const QString& source);
+
+protected:
+    void closeEvent(QCloseEvent*) override;
+    void changeEvent(QEvent*) override;
+
+private slots:
+    void onTimer();
+    void onFrameReady(const QImage& frame);
+    void onTrackerChanged(int id, QColor color);
+    void onNewProject();
+    void onOpenProject();
+    void onSaveProject();
+    void onSaveProjectAs();
+
+private:
+    void selectTracker(int id);
+    void applyProject();
+    void updateWindowTitle();
+    void saveRecent(const QString& path);
+    QStringList recentProjects() const;
+    void updateStatsTimer();
+    void log(const QString& msg);
+
+    VideoWidget*          video_;
+    SidebarWidget*        sidebar_;
+    TrackersPanel*        trackersPanel_;
+    NdiPanel*             ndiPanel_;
+    NetworkSettingsPanel* networkPanel_;
+    StatsPanel*           statsPanel_;
+    CalibrationPanel*     calibrationPanel_;
+    SessionPanel*         sessionPanel_;
+    CollapsibleSection*   calibrationSection_ = nullptr;
+
+    NdiReceiver*  ndi_;
+    PsnSender*    psnSender_;
+    PsnReceiver*  psnReceiver_;
+    SessionManager* sessionMgr_;
+    QTimer        timer_;
+    QTimer        statsTimer_;
+    QElapsedTimer statsElapsed_;
+
+    Project     project_;
+    QString     projectPath_;
+    Calibration calibration_;
+
+    QMap<int, QPair<float,float>> trackerPositions_;
+
+    QLabel* statusPos_;
+    QLabel* statusTracker_;
+    QLabel* statusNdi_;
+
+    // Stats counters
+    int     frameCount_   = 0;
+    double  currentFps_   = 0.0;
+
+    quint64 lastPsnTxPackets_ = 0;
+    quint64 lastPsnRxPackets_ = 0;
+
+    // Debug logging
+    QFile   logFile_;
+    QTextStream* logStream_ = nullptr;
+    QSize   lastNdiFrameSize_;
+    QMap<int, QPair<float,float>> lastLoggedPositions_;
+};

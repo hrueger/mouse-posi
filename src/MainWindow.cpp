@@ -1,0 +1,530 @@
+#include "MainWindow.h"
+#include "VideoWidget.h"
+#include "NdiReceiver.h"
+#include "PsnSender.h"
+#include "PsnReceiver.h"
+#include "SessionManager.h"
+#include "ui/SidebarWidget.h"
+#include "ui/CollapsibleSection.h"
+#include "ui/TrackersPanel.h"
+#include "ui/NdiPanel.h"
+#include "ui/NetworkSettingsPanel.h"
+#include "ui/StatsPanel.h"
+#include "ui/CalibrationPanel.h"
+#include "ui/SessionPanel.h"
+#include <QApplication>
+#include <QMenuBar>
+#include <QStatusBar>
+#include <QHBoxLayout>
+#include <QWidget>
+#include <QCloseEvent>
+#include <QFileDialog>
+#include <QSettings>
+#include <QMenu>
+#include <QLabel>
+#include <QMessageBox>
+#include <QShortcut>
+#include <QDir>
+#include <QFileInfo>
+#include <QAction>
+#include <QEvent>
+#include <QSet>
+#include <QDateTime>
+#include <algorithm>
+#include <cmath>
+
+namespace {
+// Temporary switch: disable incoming PSN (receiver) while keeping outgoing PSN.
+static constexpr bool kEnableIncomingPsn = false;
+}
+
+MainWindow::MainWindow(NdiReceiver* ndi, QWidget* parent) : QMainWindow(parent) {
+    setWindowTitle("mouse-posi");
+    resize(1440, 810);
+
+    // ── Central layout: video + sidebar ──────────────────────────────────
+    auto* central = new QWidget;
+    auto* layout  = new QHBoxLayout(central);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(0);
+
+    video_ = new VideoWidget;
+    video_->setCalibration(&calibration_);
+
+    sidebar_ = new SidebarWidget;
+
+    layout->addWidget(video_, 1);
+    layout->addWidget(sidebar_, 0);
+    setCentralWidget(central);
+
+    // ── Sidebar panels ────────────────────────────────────────────────────
+    ndi_         = ndi;
+    ndi_->setParent(this);
+    psnSender_   = new PsnSender(this);
+    psnReceiver_ = new PsnReceiver(this);
+    sessionMgr_  = new SessionManager(this);
+
+    sessionPanel_    = new SessionPanel(sessionMgr_);
+    ndiPanel_        = new NdiPanel(ndi_);
+    calibrationPanel_= new CalibrationPanel(video_, ndi_, this);
+    trackersPanel_   = new TrackersPanel;
+    networkPanel_    = new NetworkSettingsPanel;
+    statsPanel_      = new StatsPanel;
+
+    sidebar_->addPanel("Session",         sessionPanel_,     false);
+    sidebar_->addPanel("NDI Source",      ndiPanel_,         true);
+    calibrationSection_ = sidebar_->addPanel("Calibration", calibrationPanel_, false);
+    sidebar_->addPanel("Trackers",        trackersPanel_,    true);
+    sidebar_->addPanel("Network",         networkPanel_,     false);
+    sidebar_->addPanel("Stats",           statsPanel_,       false);
+
+    // ── Status bar ────────────────────────────────────────────────────────
+    statusTracker_ = new QLabel("No tracker — press 1–9 to select");
+    statusNdi_     = new QLabel("No NDI source");
+    statusPos_     = new QLabel("--");
+    statusBar()->addWidget(statusTracker_);
+    statusBar()->addWidget(new QLabel("  |  "));
+    statusBar()->addWidget(statusNdi_);
+    statusBar()->addWidget(new QLabel("  |  "));
+    statusBar()->addWidget(statusPos_);
+
+    // ── Signal wiring ─────────────────────────────────────────────────────
+    connect(ndi_, &NdiReceiver::frameReady, this, &MainWindow::onFrameReady);
+
+    connect(trackersPanel_, &TrackersPanel::activeTrackerChanged,
+            this, &MainWindow::onTrackerChanged);
+    connect(trackersPanel_, &TrackersPanel::trackersChanged,
+            this, [this](const QList<TrackerConfig>& t) {
+        project_.trackers = t;
+        {
+            QSet<int> validIds;
+            for (const auto& tr : project_.trackers) validIds.insert(tr.id);
+            for (auto it = trackerPositions_.begin(); it != trackerPositions_.end(); ) {
+                if (!validIds.contains(it.key())) it = trackerPositions_.erase(it);
+                else ++it;
+            }
+        }
+        if (sessionMgr_->state() == SessionManager::State::Hosting ||
+            (sessionMgr_->state() == SessionManager::State::Joined &&
+             sessionMgr_->localRole() == SessionRole::Admin))
+            sessionMgr_->broadcastProjectState(project_);
+    });
+
+    connect(ndiPanel_, &NdiPanel::sourceSelected, this, &MainWindow::setNdiSource);
+
+    connect(networkPanel_, &NetworkSettingsPanel::configChanged,
+            this, [this](const NetworkConfig& cfg) {
+        project_.network = cfg;
+        psnSender_->configure(cfg);
+        if (kEnableIncomingPsn) {
+            psnReceiver_->stop();
+            psnReceiver_->wait();
+            psnReceiver_->startListening(cfg.multicastIp, cfg.port,
+                                         cfg.psnMode == PsnMode::Multicast);
+        } else {
+            psnReceiver_->stop();
+            psnReceiver_->wait();
+        }
+    });
+
+    connect(calibrationPanel_, &CalibrationPanel::calibrationChanged,
+            this, [this](const CalibrationData& cal) {
+        project_.calibration = cal;
+        if (cal.isValid()) calibration_.fromList(cal.homography);
+        if (calibrationSection_ && cal.isValid())
+            calibrationSection_->setExpanded(false);
+        if (sessionMgr_->state() == SessionManager::State::Hosting ||
+            (sessionMgr_->state() == SessionManager::State::Joined &&
+             sessionMgr_->localRole() == SessionRole::Admin))
+            sessionMgr_->broadcastProjectState(project_);
+    });
+
+    connect(video_, &VideoWidget::mousePosInFrame, this, [this](QPointF framePt) {
+        if (video_->mouseHeld() && calibration_.isValid()) {
+            int id = trackersPanel_->activeTrackerId();
+            if (id >= 0) {
+                QPointF s = calibration_.pixelToStage(framePt);
+                trackerPositions_[id] = {float(s.x()), float(s.y())};
+                statusPos_->setText(QString("X: %1m  Z: %2m")
+                    .arg(s.x(), 0, 'f', 2).arg(s.y(), 0, 'f', 2));
+                log(QString("DRAG  tracker=%1  frame=(%2,%3)  stage=(%4,%5)")
+                    .arg(id)
+                    .arg(framePt.x(), 0, 'f', 1).arg(framePt.y(), 0, 'f', 1)
+                    .arg(s.x(), 0, 'f', 4).arg(s.y(), 0, 'f', 4));
+            }
+        }
+    });
+    connect(video_, &VideoWidget::mouseLeftPressed, this, [this](QPointF framePt) {
+        if (!calibration_.isValid()) return;
+        int id = trackersPanel_->activeTrackerId();
+        if (id < 0) return;
+        QPointF s = calibration_.pixelToStage(framePt);
+        trackerPositions_[id] = {float(s.x()), float(s.y())};
+        statusPos_->setText(QString("X: %1m  Z: %2m")
+            .arg(s.x(), 0, 'f', 2).arg(s.y(), 0, 'f', 2));
+        log(QString("CLICK tracker=%1  frame=(%2,%3)  stage=(%4,%5)")
+            .arg(id)
+            .arg(framePt.x(), 0, 'f', 1).arg(framePt.y(), 0, 'f', 1)
+            .arg(s.x(), 0, 'f', 4).arg(s.y(), 0, 'f', 4));
+    });
+
+    connect(video_, &VideoWidget::fullscreenRequested, this, [this]() {
+        if (isFullScreen()) showNormal(); else showFullScreen();
+    });
+
+    // ── Session system wiring ─────────────────────────────────────────────
+    connect(sessionMgr_, &SessionManager::stateChanged, this,
+            [this](SessionManager::State state) {
+        bool isUserStation = (state == SessionManager::State::Joined &&
+                              sessionMgr_->localRole() == SessionRole::User);
+        sidebar_->setVisible(!isUserStation);
+        menuBar()->setVisible(true);
+        if (!isUserStation && state == SessionManager::State::Idle)
+            video_->setAssignedTrackers({}, 255);  // restore full opacity
+    });
+    connect(sessionMgr_, &SessionManager::projectStateReceived,
+            this, [this](Project p, int unassignedAlpha) {
+        log(QString("SESSION_PROJECT_UPDATE  trackers=%1  calibValid=%2  unassignedAlpha=%3")
+            .arg(p.trackers.size())
+            .arg(p.calibration.isValid() ? "yes" : "no")
+            .arg(unassignedAlpha));
+        loadProject(p);
+        video_->setAssignedTrackers(sessionMgr_->localAssignedTrackers(), unassignedAlpha);
+    });
+    connect(sessionMgr_, &SessionManager::trackerAccessReceived,
+            this, [this](QList<int> ids) {
+        video_->setAssignedTrackers(ids, sessionMgr_->unassignedAlpha());
+    });
+    connect(sessionMgr_, &SessionManager::unassignedAlphaChanged,
+            this, [this](int alpha) {
+        video_->setAssignedTrackers(sessionMgr_->localAssignedTrackers(), alpha);
+    });
+    connect(sessionMgr_, &SessionManager::errorOccurred,
+            this, [this](const QString& msg) {
+        statusBar()->showMessage("Session: " + msg, 5000);
+    });
+
+    // Debug log file — ~/mouse-posi-debug.log
+    logFile_.setFileName(QDir::homePath() + "/mouse-posi-debug.log");
+    if (logFile_.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text)) {
+        logStream_ = new QTextStream(&logFile_);
+        log("=== session started ===");
+    }
+
+    // 60 Hz position stream timer
+    connect(&timer_, &QTimer::timeout, this, &MainWindow::onTimer);
+    timer_.start(16);
+
+    // 1 Hz stats update timer
+    statsElapsed_.start();
+    connect(&statsTimer_, &QTimer::timeout, this, &MainWindow::updateStatsTimer);
+    statsTimer_.start(1000);
+
+    // ── Keyboard shortcuts ────────────────────────────────────────────────
+    for (int i = 1; i <= 9; ++i) {
+        auto* sc = new QShortcut(QKeySequence(Qt::Key_0 + i), this);
+        sc->setContext(Qt::ApplicationShortcut);
+        connect(sc, &QShortcut::activated, this, [this, i]() { selectTracker(i); });
+    }
+    {
+        auto* sc = new QShortcut(QKeySequence(Qt::Key_Escape), this);
+        sc->setContext(Qt::ApplicationShortcut);
+        connect(sc, &QShortcut::activated, this, [this]() { selectTracker(-1); });
+    }
+
+    // ── Menus ────────────────────────────────────────────────────────────
+    auto* fileMenu  = menuBar()->addMenu("&File");
+    auto* actNew    = fileMenu->addAction("&New Project");
+    auto* actOpen   = fileMenu->addAction("&Open Project...");
+    auto* actSave   = fileMenu->addAction("&Save Project");
+    auto* actSaveAs = fileMenu->addAction("Save Project &As...");
+    actNew->setShortcut(QKeySequence::New);
+    actOpen->setShortcut(QKeySequence::Open);
+    actSave->setShortcut(QKeySequence::Save);
+    actSaveAs->setShortcut(QKeySequence::SaveAs);
+    connect(actNew,    &QAction::triggered, this, &MainWindow::onNewProject);
+    connect(actOpen,   &QAction::triggered, this, &MainWindow::onOpenProject);
+    connect(actSave,   &QAction::triggered, this, &MainWindow::onSaveProject);
+    connect(actSaveAs, &QAction::triggered, this, &MainWindow::onSaveProjectAs);
+
+    // Ensure shortcuts work even if the menu bar is hidden by the OS/window mode.
+    addAction(actNew);
+    addAction(actOpen);
+    addAction(actSave);
+    addAction(actSaveAs);
+
+    auto* recentMenu = fileMenu->addMenu("Recent Projects");
+    connect(recentMenu, &QMenu::aboutToShow, this, [this, recentMenu]() {
+        recentMenu->clear();
+        for (const auto& path : recentProjects()) {
+            auto* a = recentMenu->addAction(path);
+            connect(a, &QAction::triggered, this, [this, path]() {
+                projectPath_ = path;
+                loadProject(Project::load(path));
+                saveRecent(path);
+            });
+        }
+    });
+    fileMenu->addSeparator();
+    auto* actExit = fileMenu->addAction("E&xit");
+    connect(actExit, &QAction::triggered, qApp, &QApplication::quit);
+
+    auto* viewMenu  = menuBar()->addMenu("&View");
+    auto* actToggleSidebar = viewMenu->addAction("Toggle Sidebar");
+    actToggleSidebar->setShortcut(QKeySequence("Ctrl+\\"));
+    connect(actToggleSidebar, &QAction::triggered, this, [this]() {
+        sidebar_->setVisible(!sidebar_->isVisible());
+    });
+
+    loadProject(Project::defaultProject());
+}
+
+MainWindow::~MainWindow() {
+    timer_.stop();
+    statsTimer_.stop();
+    psnReceiver_->stop();
+    ndi_->stop();
+    psnReceiver_->wait();
+    ndi_->wait();
+    log("=== session ended ===");
+    delete logStream_;
+}
+
+void MainWindow::log(const QString& msg) {
+    if (!logStream_) return;
+    *logStream_ << QDateTime::currentDateTime().toString("[HH:mm:ss.zzz] ") << msg << "\n";
+    logStream_->flush();
+}
+
+void MainWindow::selectTracker(int id) {
+    if (id >= 0) {
+        bool exists = false;
+        for (const auto& t : project_.trackers) {
+            if (t.id == id) { exists = true; break; }
+        }
+        if (!exists) {
+            statusBar()->showMessage(
+                QString("Tracker %1 is not configured (add it in Trackers).")
+                    .arg(id),
+                4000);
+            id = -1;
+        }
+    }
+    trackersPanel_->setActiveTrackerId(id);
+    QColor color = id >= 0 ? trackersPanel_->activeColor() : Qt::white;
+    video_->setActiveTracker(id, color);
+    if (id >= 0)
+        statusTracker_->setText(QString("Tracker %1 — hold left mouse to send").arg(id));
+    else
+        statusTracker_->setText("No tracker — press 1–9 to select");
+}
+
+void MainWindow::loadProject(const Project& p) {
+    project_ = p;
+    applyProject();
+}
+
+void MainWindow::setNdiSource(const QString& source) {
+    project_.ndiSource = source;
+    ndi_->connectToSource(source);
+    statusNdi_->setText("NDI: " + source + " (connecting…)");
+    ndiPanel_->setCurrentSource(source);
+}
+
+void MainWindow::applyProject() {
+    updateWindowTitle();
+    trackersPanel_->setTrackers(project_.trackers);
+    networkPanel_->setConfig(project_.network);
+    psnSender_->configure(project_.network);
+    if (kEnableIncomingPsn) {
+        psnReceiver_->stop();
+        psnReceiver_->wait();
+        psnReceiver_->startListening(project_.network.multicastIp,
+                                     project_.network.port,
+                                     project_.network.psnMode == PsnMode::Multicast);
+    } else {
+        psnReceiver_->stop();
+        psnReceiver_->wait();
+    }
+    if (!project_.ndiSource.isEmpty())
+        setNdiSource(project_.ndiSource);
+    if (project_.calibration.isValid()) {
+        calibration_.fromList(project_.calibration.homography);
+        const auto& h = project_.calibration.homography;
+        if (h.size() == 9)
+            log(QString("CALIBRATION  H=[%1 %2 %3 | %4 %5 %6 | %7 %8 %9]")
+                .arg(h[0],0,'g',6).arg(h[1],0,'g',6).arg(h[2],0,'g',6)
+                .arg(h[3],0,'g',6).arg(h[4],0,'g',6).arg(h[5],0,'g',6)
+                .arg(h[6],0,'g',6).arg(h[7],0,'g',6).arg(h[8],0,'g',6));
+        calibrationPanel_->setCalibration(project_.calibration);
+        if (calibrationSection_)
+            calibrationSection_->setExpanded(false);
+    }
+}
+
+void MainWindow::updateWindowTitle() {
+    const QString base = QStringLiteral("mouse-posi");
+    const QString projectName = project_.name.isEmpty() ? QStringLiteral("New Project") : project_.name;
+
+    if (projectPath_.isEmpty()) {
+        setWindowTitle(QString("%1 — %2").arg(base, projectName));
+        return;
+    }
+
+    const QString fileName = QFileInfo(projectPath_).fileName();
+    if (fileName.isEmpty()) {
+        setWindowTitle(QString("%1 — %2").arg(base, projectName));
+        return;
+    }
+
+    setWindowTitle(QString("%1 — %2 (%3)").arg(base, projectName, fileName));
+}
+
+void MainWindow::closeEvent(QCloseEvent* e) {
+    if (!projectPath_.isEmpty())
+        project_.save(projectPath_);
+    e->accept();
+}
+
+void MainWindow::changeEvent(QEvent* e) {
+    QMainWindow::changeEvent(e);
+    // Hide sidebar when entering native fullscreen
+    if (e->type() == QEvent::WindowStateChange) {
+        sidebar_->setFullscreenMode(isFullScreen());
+    }
+}
+
+void MainWindow::onTimer() {
+    if (trackerPositions_ != lastLoggedPositions_) {
+        for (auto it = trackerPositions_.cbegin(); it != trackerPositions_.cend(); ++it) {
+            auto prev = lastLoggedPositions_.value(it.key(), {1e9f, 1e9f});
+            if (it.value() != prev)
+                log(QString("POSITION  tracker=%1  stage=(%2,%3)  delta=(%4,%5)")
+                    .arg(it.key())
+                    .arg(it.value().first, 0, 'f', 4).arg(it.value().second, 0, 'f', 4)
+                    .arg(it.value().first  - prev.first,  0, 'f', 4)
+                    .arg(it.value().second - prev.second, 0, 'f', 4));
+        }
+        for (auto it = lastLoggedPositions_.cbegin(); it != lastLoggedPositions_.cend(); ++it) {
+            if (!trackerPositions_.contains(it.key()))
+                log(QString("POSITION  tracker=%1  removed").arg(it.key()));
+        }
+        lastLoggedPositions_ = trackerPositions_;
+    }
+    video_->setOwnPositions(trackerPositions_, project_.trackers);
+    if (!trackerPositions_.isEmpty())
+        psnSender_->sendPositions(trackerPositions_, project_.trackers);
+    frameCount_++;
+}
+
+void MainWindow::updateStatsTimer() {
+    double elapsed = statsElapsed_.restart() / 1000.0;
+    currentFps_  = frameCount_ / elapsed;
+    frameCount_  = 0;
+
+    // PSN stats
+    if (elapsed > 0.0) {
+        quint64 txTotal = psnSender_->totalPacketsSent();
+        quint64 rxTotal = psnReceiver_->totalBinaryPacketsReceived();
+        int txRate = static_cast<int>(std::llround((txTotal - lastPsnTxPackets_) / elapsed));
+        int rxRate = static_cast<int>(std::llround((rxTotal - lastPsnRxPackets_) / elapsed));
+        lastPsnTxPackets_ = txTotal;
+        lastPsnRxPackets_ = rxTotal;
+        statsPanel_->setPsnTxRate(std::max(0, txRate));
+        statsPanel_->setPsnRxRate(std::max(0, rxRate), psnReceiver_->remotePositions().size());
+    } else {
+        statsPanel_->setPsnTxRate(0);
+        statsPanel_->setPsnRxRate(0, psnReceiver_->remotePositions().size());
+    }
+
+    statsPanel_->setNdiInfo(project_.ndiSource,
+                             video_->frameSize().width(),
+                             video_->frameSize().height(),
+                             currentFps_);
+    statsPanel_->setSessionInfo(
+        sessionMgr_->state() == SessionManager::State::Idle ? "Offline" :
+        sessionMgr_->state() == SessionManager::State::Hosting ? "Hosting" : "Joined",
+        sessionMgr_->peers().size());
+}
+
+void MainWindow::onFrameReady(const QImage& frame) {
+    QSize sz(frame.width(), frame.height());
+    if (sz != lastNdiFrameSize_) {
+        log(QString("NDI_SIZE  %1x%2  (was %3x%4)")
+            .arg(sz.width()).arg(sz.height())
+            .arg(lastNdiFrameSize_.width()).arg(lastNdiFrameSize_.height()));
+        lastNdiFrameSize_ = sz;
+    }
+    video_->setFrame(frame);
+    statusNdi_->setText(QString("NDI: %1  %2×%3")
+        .arg(project_.ndiSource).arg(frame.width()).arg(frame.height()));
+
+    auto remote = kEnableIncomingPsn ? psnReceiver_->remotePositions() : QMap<int, QVector3D>{};
+    if (video_->mouseHeld()) {
+        const int activeId = trackersPanel_->activeTrackerId();
+        if (activeId >= 0) remote.remove(activeId);
+    }
+    video_->setRemotePositions(remote, project_.trackers);
+}
+
+void MainWindow::onTrackerChanged(int id, QColor color) {
+    video_->setActiveTracker(id, color);
+    statusTracker_->setText(QString("Tracker %1 — hold left mouse to send").arg(id));
+}
+
+void MainWindow::onNewProject() {
+    project_     = Project::defaultProject();
+    projectPath_ = QString();
+    trackerPositions_.clear();
+    applyProject();
+}
+
+void MainWindow::onOpenProject() {
+    QFileDialog::Options opts;
+#ifdef Q_OS_MAC
+    opts |= QFileDialog::DontUseNativeDialog;
+#endif
+    QString path = QFileDialog::getOpenFileName(
+        this, "Open Project", QDir::homePath(), "mouse-posi Projects (*.mposi)", nullptr, opts);
+    if (path.isEmpty()) return;
+    projectPath_ = path;
+    loadProject(Project::load(path));
+    saveRecent(path);
+    updateWindowTitle();
+}
+
+void MainWindow::onSaveProject() {
+    if (projectPath_.isEmpty()) { onSaveProjectAs(); return; }
+    project_.save(projectPath_);
+    updateWindowTitle();
+}
+
+void MainWindow::onSaveProjectAs() {
+    QFileDialog::Options opts;
+#ifdef Q_OS_MAC
+    opts |= QFileDialog::DontUseNativeDialog;
+#endif
+    QString path = QFileDialog::getSaveFileName(
+        this, "Save Project",
+        QDir::homePath() + "/" + project_.name + ".mposi",
+        "mouse-posi Projects (*.mposi)", nullptr, opts);
+    if (path.isEmpty()) return;
+    projectPath_ = path;
+    project_.save(path);
+    saveRecent(path);
+    updateWindowTitle();
+}
+
+void MainWindow::saveRecent(const QString& path) {
+    QSettings s("mouse-posi", "mouse-posi");
+    QStringList recent = s.value("recentProjects").toStringList();
+    recent.removeAll(path);
+    recent.prepend(path);
+    while (recent.size() > 10) recent.removeLast();
+    s.setValue("recentProjects", recent);
+}
+
+QStringList MainWindow::recentProjects() const {
+    QSettings s("mouse-posi", "mouse-posi");
+    return s.value("recentProjects").toStringList();
+}
