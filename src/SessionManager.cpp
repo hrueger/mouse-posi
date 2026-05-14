@@ -57,6 +57,7 @@ SessionManager::SessionManager(QObject* parent) : QObject(parent) {
 }
 
 SessionManager::~SessionManager() {
+    blockSignals(true);
     stopHosting();
     leaveSession();
     stopBrowsing();
