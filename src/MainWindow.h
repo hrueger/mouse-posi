@@ -15,6 +15,7 @@
 class VideoWidget;
 class NdiReceiver;
 class WebcamCapture;
+class DeckLinkCapture;
 class PsnSender;
 class PsnReceiver;
 class SessionManager;
@@ -37,6 +38,7 @@ public:
     void loadProject(const Project& p);
     void setNdiSource(const QString& source);
     void setWebcamSource(const QString& device);
+    void setDecklinkSource(const QString& device);
 
 protected:
     void closeEvent(QCloseEvent*) override;
@@ -46,6 +48,7 @@ private slots:
     void onTimer();
     void onFrameReady(const QImage& frame);
     void onWebcamFrameReady(const QImage& frame);
+    void onDecklinkFrameReady(const QImage& frame);
     void onNewProject();
     void onOpenProject();
     void onSaveProject();
@@ -80,6 +83,7 @@ private:
 
     NdiReceiver*  ndi_;
     WebcamCapture* webcam_;
+    DeckLinkCapture* decklink_;
     PsnSender*    psnSender_;
     PsnReceiver*  psnReceiver_;
     SessionManager* sessionMgr_;
@@ -114,7 +118,7 @@ private:
     QSize   lastVideoFrameSize_;
     QMap<int, QPair<float,float>> lastLoggedPositions_;
 
-    enum class VideoSourceKind { Ndi, Webcam };
+    enum class VideoSourceKind { Ndi, Webcam, DeckLink };
     VideoSourceKind videoSourceKind_ = VideoSourceKind::Ndi;
     QString         videoSourceName_;
 };

@@ -7,6 +7,8 @@
 #include <QPushButton>
 #include <QLabel>
 #include <QTimer>
+#include <QFrame>
+#include "../DeckLinkCapture.h"
 #if WEBCAM_AVAILABLE
 #  include <QMediaDevices>
 #  include <QCameraDevice>
@@ -212,17 +214,119 @@ class DecklinkSourceTab : public VideoSourceTab {
 public:
     explicit DecklinkSourceTab(QWidget* parent = nullptr) : VideoSourceTab(parent) {
         auto* layout = new QVBoxLayout(this);
-        layout->setContentsMargins(0, 8, 0, 0);
-        auto* label = new QLabel("DeckLink support is coming soon.");
+        layout->setContentsMargins(0, 0, 0, 0);
+        layout->setSpacing(6);
+
+#if defined(DECKLINK_AVAILABLE) && DECKLINK_AVAILABLE
+        warningLabel_ = new QLabel;
+        warningLabel_->setWordWrap(true);
+        warningLabel_->setVisible(false);
+        // Reuse the app's existing warning color.
+        warningLabel_->setStyleSheet(
+            "color: #cc9900;"
+            "font-size: 11px;"
+            "padding: 8px 10px;"
+            "border: 1px solid palette(mid);"
+            "border-radius: 4px;"
+        );
+        layout->addWidget(warningLabel_);
+
+        combo_ = new QComboBox;
+        combo_->setMinimumContentsLength(16);
+        combo_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+        combo_->setPlaceholderText("No DeckLink devices found");
+        layout->addWidget(combo_);
+
+        auto* btnRow = new QHBoxLayout;
+        refreshBtn_ = new QPushButton("Refresh");
+        btnRow->addWidget(refreshBtn_);
+        btnRow->addStretch();
+        layout->addLayout(btnRow);
+
+        layout->addStretch();
+
+        connect(refreshBtn_, &QPushButton::clicked, this, &DecklinkSourceTab::refreshSources);
+        connect(combo_, &QComboBox::currentTextChanged, this, [this](const QString& text) {
+            if (!settingSource_ && !text.isEmpty())
+                emit sourceActivated(text);
+        });
+
+        refreshSources();
+#else
+        auto* label = new QLabel("DeckLink is not available on this platform.");
         label->setWordWrap(true);
         label->setStyleSheet("color: palette(placeholderText); font-size: 11px;");
         layout->addWidget(label);
         layout->addStretch();
+#endif
     }
 
+#if defined(DECKLINK_AVAILABLE) && DECKLINK_AVAILABLE
+    void refreshSources() override {
+        settingSource_ = true;
+
+        const QString previous = combo_->currentText();
+        combo_->clear();
+
+        QString err;
+        const QStringList devs = DeckLinkCapture::listDevices(&err);
+        const bool apiMissing = !err.isEmpty();
+        warningLabel_->setVisible(apiMissing);
+        warningLabel_->setText(err);
+        combo_->setVisible(!apiMissing);
+        refreshBtn_->setVisible(!apiMissing);
+
+        if (apiMissing) {
+            settingSource_ = false;
+            return;
+        }
+
+        combo_->addItems(devs);
+
+        int nextIndex = -1;
+        if (!previous.isEmpty())
+            nextIndex = combo_->findText(previous);
+        if (nextIndex < 0 && combo_->count() > 0)
+            nextIndex = 0;
+
+        bool shouldActivate = false;
+        if (nextIndex >= 0) {
+            combo_->setCurrentIndex(nextIndex);
+            shouldActivate = (previous.isEmpty() || combo_->currentText() != previous);
+        }
+
+        settingSource_ = false;
+
+        if (shouldActivate && !combo_->currentText().isEmpty())
+            emit sourceActivated(combo_->currentText());
+    }
+
+    QString selectedSource() const override {
+        return combo_->currentText();
+    }
+
+    void setCurrentSource(const QString& name) override {
+        settingSource_ = true;
+        const int idx = combo_->findText(name);
+        if (idx >= 0) {
+            combo_->setCurrentIndex(idx);
+        } else if (!name.isEmpty()) {
+            combo_->addItem(name);
+            combo_->setCurrentIndex(combo_->count() - 1);
+        }
+        settingSource_ = false;
+    }
+
+private:
+    QComboBox*   combo_ = nullptr;
+    QPushButton* refreshBtn_ = nullptr;
+    QLabel*      warningLabel_ = nullptr;
+    bool         settingSource_ = false;
+#else
     void    refreshSources() override {}
     QString selectedSource() const override { return {}; }
     void    setCurrentSource(const QString&) override {}
+#endif
 };
 
 // ── StreamSourcePanel ─────────────────────────────────────────────────────────
@@ -251,6 +355,9 @@ StreamSourcePanel::StreamSourcePanel(NdiReceiver* ndi, QWidget* parent)
     connect(webcamTab_, &VideoSourceTab::sourceActivated,
             this,       &StreamSourcePanel::webcamSourceSelected);
 
+        connect(decklinkTab_, &VideoSourceTab::sourceActivated,
+            this,         &StreamSourcePanel::decklinkSourceSelected);
+
     connect(tabs_, &QTabWidget::currentChanged, this, [this](int idx) {
         QWidget* w = tabs_->widget(idx);
         if (w == ndiTab_) {
@@ -259,6 +366,9 @@ StreamSourcePanel::StreamSourcePanel(NdiReceiver* ndi, QWidget* parent)
         } else if (w == webcamTab_) {
             const QString dev = webcamTab_->selectedSource();
             if (!dev.isEmpty()) emit webcamSourceSelected(dev);
+        } else if (w == decklinkTab_) {
+            const QString dev = decklinkTab_->selectedSource();
+            if (!dev.isEmpty()) emit decklinkSourceSelected(dev);
         }
     });
 }

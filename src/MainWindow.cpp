@@ -2,6 +2,7 @@
 #include "VideoWidget.h"
 #include "NdiReceiver.h"
 #include "WebcamCapture.h"
+#include "DeckLinkCapture.h"
 #include "PsnSender.h"
 #include "PsnReceiver.h"
 #include "SessionManager.h"
@@ -75,6 +76,7 @@ MainWindow::MainWindow(NdiReceiver* ndi, QWidget* parent) : QMainWindow(parent) 
     ndi_         = ndi;
     ndi_->setParent(this);
     webcam_      = new WebcamCapture(this);
+    decklink_    = new DeckLinkCapture(this);
     psnSender_   = new PsnSender(this);
     psnReceiver_ = new PsnReceiver(this);
     sessionMgr_  = new SessionManager(this);
@@ -145,6 +147,7 @@ MainWindow::MainWindow(NdiReceiver* ndi, QWidget* parent) : QMainWindow(parent) 
     // ── Signal wiring ─────────────────────────────────────────────────────
     connect(ndi_, &NdiReceiver::frameReady, this, &MainWindow::onFrameReady);
     connect(webcam_, &WebcamCapture::frameReady, this, &MainWindow::onWebcamFrameReady);
+    connect(decklink_, &DeckLinkCapture::frameReady, this, &MainWindow::onDecklinkFrameReady);
 
     connect(trackerBar_, &TrackerBar::trackerSelected,
             this, [this](int id) { selectTracker(id); });
@@ -174,6 +177,7 @@ MainWindow::MainWindow(NdiReceiver* ndi, QWidget* parent) : QMainWindow(parent) 
 
     connect(streamPanel_, &StreamSourcePanel::ndiSourceSelected, this, &MainWindow::setNdiSource);
     connect(streamPanel_, &StreamSourcePanel::webcamSourceSelected, this, &MainWindow::setWebcamSource);
+    connect(streamPanel_, &StreamSourcePanel::decklinkSourceSelected, this, &MainWindow::setDecklinkSource);
 
     connect(networkPanel_, &NetworkSettingsPanel::configChanged,
             this, [this](const NetworkConfig& cfg) {
@@ -463,6 +467,7 @@ void MainWindow::setNdiSource(const QString& source) {
     videoSourceName_ = source;
 
     webcam_->stop();
+    decklink_->stop();
     ndi_->connectToSource(source);
     statusNdi_->setText(source.isEmpty() ? "No NDI source" : "NDI: " + source + " (connecting…)");
     streamPanel_->setCurrentNdiSource(source);
@@ -476,6 +481,7 @@ void MainWindow::setWebcamSource(const QString& device) {
 
     // Stop NDI decoding to reduce CPU/network usage when using the webcam.
     ndi_->disconnectFromSource();
+    decklink_->stop();
 
     webcam_->setDeviceDescription(device);
     webcam_->start();
@@ -485,6 +491,27 @@ void MainWindow::setWebcamSource(const QString& device) {
 #else
     (void)device;
     statusNdi_->setText("Webcam support unavailable (install Qt Multimedia)");
+    video_->setNdiSourceConfigured(false);
+#endif
+}
+
+void MainWindow::setDecklinkSource(const QString& device) {
+#if defined(DECKLINK_AVAILABLE) && DECKLINK_AVAILABLE
+    videoSourceKind_ = VideoSourceKind::DeckLink;
+    videoSourceName_ = device;
+
+    // Stop other sources to keep CPU/network use low.
+    ndi_->disconnectFromSource();
+    webcam_->stop();
+
+    decklink_->setDeviceName(device);
+    decklink_->start();
+
+    statusNdi_->setText(device.isEmpty() ? "No DeckLink device" : "DeckLink: " + device + " (starting…)");
+    video_->setNdiSourceConfigured(!device.isEmpty());
+#else
+    (void)device;
+    statusNdi_->setText("DeckLink support unavailable");
     video_->setNdiSourceConfigured(false);
 #endif
 }
@@ -661,6 +688,15 @@ void MainWindow::onWebcamFrameReady(const QImage& frame) {
 
     handleVideoFrame(frame);
     statusNdi_->setText(QString("Webcam: %1  %2×%3")
+        .arg(videoSourceName_).arg(frame.width()).arg(frame.height()));
+}
+
+void MainWindow::onDecklinkFrameReady(const QImage& frame) {
+    if (videoSourceKind_ != VideoSourceKind::DeckLink)
+        return;
+
+    handleVideoFrame(frame);
+    statusNdi_->setText(QString("DeckLink: %1  %2×%3")
         .arg(videoSourceName_).arg(frame.width()).arg(frame.height()));
 }
 

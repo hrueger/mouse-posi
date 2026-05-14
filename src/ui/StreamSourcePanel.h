@@ -17,6 +17,7 @@ public:
 signals:
     void ndiSourceSelected(const QString& source);
     void webcamSourceSelected(const QString& device);
+    void decklinkSourceSelected(const QString& device);
 
 private:
     QTabWidget*     tabs_;

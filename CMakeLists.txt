@@ -35,6 +35,7 @@ set(SOURCES
     src/VideoWidget.cpp
     src/NdiReceiver.cpp
     src/WebcamCapture.cpp
+    src/DeckLinkCapture.cpp
     src/PsnSender.cpp
     src/PsnReceiver.cpp
     src/Calibration.cpp
@@ -58,6 +59,7 @@ set(HEADERS
     src/VideoWidget.h
     src/NdiReceiver.h
     src/WebcamCapture.h
+    src/DeckLinkCapture.h
     src/PsnSender.h
     src/PsnReceiver.h
     src/Calibration.h
@@ -117,6 +119,7 @@ endif()
 
 target_include_directories(mouse-posi PRIVATE
     src
+    third_party/decklink/include
     ${OpenCV_INCLUDE_DIRS}
 )
 
@@ -173,5 +176,11 @@ if(APPLE)
     find_library(FOUNDATION Foundation REQUIRED)
     find_library(AVFOUNDATION AVFoundation REQUIRED)
     find_library(COREMEDIA CoreMedia REQUIRED)
-    target_link_libraries(mouse-posi PRIVATE ${FOUNDATION} ${AVFOUNDATION} ${COREMEDIA})
+    find_library(COREFOUNDATION CoreFoundation REQUIRED)
+
+    # DeckLink SDK: we build against the headers and link via the SDK dispatch loader.
+    target_sources(mouse-posi PRIVATE third_party/decklink/include/DeckLinkAPIDispatch.cpp)
+    target_compile_definitions(mouse-posi PRIVATE DECKLINK_AVAILABLE=1)
+
+    target_link_libraries(mouse-posi PRIVATE ${FOUNDATION} ${AVFOUNDATION} ${COREMEDIA} ${COREFOUNDATION})
 endif()
