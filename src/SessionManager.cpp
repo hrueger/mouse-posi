@@ -1,4 +1,5 @@
 #include "SessionManager.h"
+#include <QDebug>
 #include <QJsonDocument>
 #include <QJsonArray>
 #include <QDataStream>
@@ -36,6 +37,7 @@ SessionManager::SessionManager(QObject* parent) : QObject(parent) {
 
     connect(dns_, &DnsSdBridge::serviceFound,
             this, [this](QString name, QString host, quint16 port) {
+        qDebug() << "[SessionManager] serviceFound" << name << host << port;
         for (auto& d : discovered_) {
             if (d.name == name) { d.host = host; d.port = port;
                 emit browsedSessionsChanged(discovered_); return; }
@@ -443,6 +445,15 @@ QJsonObject SessionManager::projectToJson(const Project& p) const {
     }
     obj["imagePoints"] = imgPts;
     obj["stagePoints"] = stagePts;
+    QJsonObject net;
+    net["psnMode"]          = static_cast<int>(p.network.psnMode);
+    net["multicastIp"]      = p.network.multicastIp;
+    net["unicastIp"]        = p.network.unicastIp;
+    net["broadcastIp"]      = p.network.broadcastIp;
+    net["port"]             = p.network.port;
+    net["psnInterface"]     = p.network.psnInterface;
+    net["sessionInterface"] = p.network.sessionInterface;
+    obj["network"] = net;
     return obj;
 }
 
@@ -466,6 +477,16 @@ Project SessionManager::projectFromJson(const QJsonObject& obj) const {
     for (auto v : obj["stagePoints"].toArray()) {
         auto a = v.toArray();
         if (a.size() >= 2) p.calibration.stagePoints << QPointF(a[0].toDouble(), a[1].toDouble());
+    }
+    if (obj.contains("network")) {
+        auto net = obj["network"].toObject();
+        p.network.psnMode         = static_cast<PsnMode>(net["psnMode"].toInt());
+        p.network.multicastIp     = net["multicastIp"].toString(p.network.multicastIp);
+        p.network.unicastIp       = net["unicastIp"].toString();
+        p.network.broadcastIp     = net["broadcastIp"].toString(p.network.broadcastIp);
+        p.network.port            = static_cast<quint16>(net["port"].toInt(p.network.port));
+        p.network.psnInterface    = net["psnInterface"].toString();
+        p.network.sessionInterface= net["sessionInterface"].toString();
     }
     return p;
 }

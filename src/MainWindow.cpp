@@ -23,6 +23,7 @@
 #include <QMenu>
 #include <QLabel>
 #include <QMessageBox>
+#include <QPushButton>
 #include <QShortcut>
 #include <QDir>
 #include <QFileInfo>
@@ -34,8 +35,7 @@
 #include <cmath>
 
 namespace {
-// Temporary switch: disable incoming PSN (receiver) while keeping outgoing PSN.
-static constexpr bool kEnableIncomingPsn = false;
+static constexpr bool kEnableIncomingPsn = true;
 }
 
 MainWindow::MainWindow(NdiReceiver* ndi, QWidget* parent) : QMainWindow(parent) {
@@ -87,6 +87,27 @@ MainWindow::MainWindow(NdiReceiver* ndi, QWidget* parent) : QMainWindow(parent) 
     statusBar()->addWidget(statusNdi_);
     statusBar()->addWidget(new QLabel("  |  "));
     statusBar()->addWidget(statusPos_);
+
+    statusPsnOut_ = new QLabel("● PSN Out");
+    statusPsnOut_->setStyleSheet("color: #cc3333; padding: 0 4px;");
+    statusBar()->addPermanentWidget(statusPsnOut_);
+
+    statusSession_ = new QLabel;
+    leaveSessionBtn_ = new QPushButton("Leave Session");
+    leaveSessionBtn_->setFlat(true);
+    leaveSessionBtn_->setStyleSheet(
+        "QPushButton { border: 1px solid palette(mid); border-radius: 3px;"
+        " padding: 1px 8px; margin: 1px 2px; }"
+        "QPushButton:hover { background: palette(button); }");
+    leaveSessionBtn_->setVisible(false);
+    connect(leaveSessionBtn_, &QPushButton::clicked, this, [this]() {
+        if (QMessageBox::question(this, "Leave Session",
+                "Leave the current session?",
+                QMessageBox::Yes | QMessageBox::No) == QMessageBox::Yes)
+            sessionMgr_->leaveSession();
+    });
+    statusBar()->addPermanentWidget(leaveSessionBtn_);
+    statusBar()->addPermanentWidget(statusSession_);
 
     // ── Signal wiring ─────────────────────────────────────────────────────
     connect(ndi_, &NdiReceiver::frameReady, this, &MainWindow::onFrameReady);
@@ -181,6 +202,9 @@ MainWindow::MainWindow(NdiReceiver* ndi, QWidget* parent) : QMainWindow(parent) 
         menuBar()->setVisible(true);
         if (!isUserStation && state == SessionManager::State::Idle)
             video_->setAssignedTrackers({}, 255);  // restore full opacity
+        if (state == SessionManager::State::Hosting)
+            sessionMgr_->broadcastProjectState(project_);  // seed sharedProject_ before any peer joins
+        updateSessionStatus();
     });
     connect(sessionMgr_, &SessionManager::projectStateReceived,
             this, [this](Project p, int unassignedAlpha) {
@@ -277,6 +301,7 @@ MainWindow::MainWindow(NdiReceiver* ndi, QWidget* parent) : QMainWindow(parent) 
     });
 
     loadProject(Project::defaultProject());
+    updateSessionStatus();
 }
 
 MainWindow::~MainWindow() {
@@ -423,18 +448,22 @@ void MainWindow::updateStatsTimer() {
     frameCount_  = 0;
 
     // PSN stats
+    int txRate = 0, rxRate = 0;
     if (elapsed > 0.0) {
         quint64 txTotal = psnSender_->totalPacketsSent();
         quint64 rxTotal = psnReceiver_->totalBinaryPacketsReceived();
-        int txRate = static_cast<int>(std::llround((txTotal - lastPsnTxPackets_) / elapsed));
-        int rxRate = static_cast<int>(std::llround((rxTotal - lastPsnRxPackets_) / elapsed));
+        txRate = std::max(0, static_cast<int>(std::llround((txTotal - lastPsnTxPackets_) / elapsed)));
+        rxRate = std::max(0, static_cast<int>(std::llround((rxTotal - lastPsnRxPackets_) / elapsed)));
         lastPsnTxPackets_ = txTotal;
         lastPsnRxPackets_ = rxTotal;
-        statsPanel_->setPsnTxRate(std::max(0, txRate));
-        statsPanel_->setPsnRxRate(std::max(0, rxRate), psnReceiver_->remotePositions().size());
+    }
+    statsPanel_->setPsnTxRate(txRate);
+    statsPanel_->setPsnRxRate(rxRate, psnReceiver_->remotePositions().size());
+
+    if (txRate > 0) {
+        statusPsnOut_->setStyleSheet("color: #33aa44; padding: 0 4px;");
     } else {
-        statsPanel_->setPsnTxRate(0);
-        statsPanel_->setPsnRxRate(0, psnReceiver_->remotePositions().size());
+        statusPsnOut_->setStyleSheet("color: #cc3333; padding: 0 4px;");
     }
 
     statsPanel_->setNdiInfo(project_.ndiSource,
@@ -445,6 +474,30 @@ void MainWindow::updateStatsTimer() {
         sessionMgr_->state() == SessionManager::State::Idle ? "Offline" :
         sessionMgr_->state() == SessionManager::State::Hosting ? "Hosting" : "Joined",
         sessionMgr_->peers().size());
+}
+
+void MainWindow::updateSessionStatus() {
+    auto state = sessionMgr_->state();
+    bool isJoinedUser = state == SessionManager::State::Joined
+                        && sessionMgr_->localRole() == SessionRole::User;
+
+    struct { const char* text; const char* color; } info;
+    switch (state) {
+        case SessionManager::State::Idle:
+            info = {"● Offline",     "#888888"}; break;
+        case SessionManager::State::Hosting:
+            info = {"● Hosting",     "#33aa44"}; break;
+        case SessionManager::State::Joining:
+            info = {"● Connecting…", "#ccaa22"}; break;
+        case SessionManager::State::Joined:
+            info = sessionMgr_->localRole() == SessionRole::Admin
+                   ? decltype(info){"● Joined (Admin)", "#33aa44"}
+                   : decltype(info){"● Joined",         "#33aa44"};
+            break;
+    }
+    statusSession_->setText(info.text);
+    statusSession_->setStyleSheet(QString("color: %1; padding: 0 4px;").arg(info.color));
+    leaveSessionBtn_->setVisible(isJoinedUser);
 }
 
 void MainWindow::onFrameReady(const QImage& frame) {

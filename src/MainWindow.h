@@ -2,6 +2,7 @@
 #include <QMainWindow>
 #include <QTimer>
 #include <QLabel>
+#include <QPushButton>
 #include <QMap>
 #include <QElapsedTimer>
 #include <QFile>
@@ -54,6 +55,7 @@ private:
     void saveRecent(const QString& path);
     QStringList recentProjects() const;
     void updateStatsTimer();
+    void updateSessionStatus();
     void log(const QString& msg);
 
     VideoWidget*          video_;
@@ -80,9 +82,12 @@ private:
 
     QMap<int, QPair<float,float>> trackerPositions_;
 
-    QLabel* statusPos_;
-    QLabel* statusTracker_;
-    QLabel* statusNdi_;
+    QLabel*       statusPos_;
+    QLabel*       statusTracker_;
+    QLabel*       statusNdi_;
+    QLabel*       statusSession_;
+    QLabel*       statusPsnOut_;
+    QPushButton*  leaveSessionBtn_;
 
     // Stats counters
     int     frameCount_   = 0;
