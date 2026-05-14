@@ -1,8 +1,11 @@
 #pragma once
 #include <QWidget>
+#include <QMap>
+#include <QStringList>
 #include "Project.h"
 
-class QListWidget;
+class QTableWidget;
+class QTableWidgetItem;
 class QPushButton;
 
 class TrackersPanel : public QWidget {
@@ -17,23 +20,36 @@ public:
     int  activeTrackerId() const { return activeId_; }
     QColor activeColor() const;
 
+    void setSessionContext(bool isAdminOrHost,
+                           const QStringList& peerNames,
+                           const QMap<QString, QList<int>>& peerAssignments);
+
 signals:
-    void activeTrackerChanged(int id, QColor color);
     void trackersChanged(QList<TrackerConfig> trackers);
+    void trackerAccessChanged(QString peerName, QList<int> assignedTrackerIds);
 
 private slots:
     void onAddTracker();
     void onRemoveTracker();
-    void onEditTracker();
+    void onCellDoubleClicked(int row, int col);
+    void onItemChanged(QTableWidgetItem* item);
 
 private:
-    void rebuildList();
-    void editTrackerAt(int row);
+    void rebuildTable();
+    void updateRowStyle(int row);
 
-    QListWidget*         list_;
-    QPushButton*         addBtn_;
-    QPushButton*         removeBtn_;
-    QPushButton*         editBtn_;
-    QList<TrackerConfig> trackers_;
-    int                  activeId_ = -1;
+    static constexpr int COL_ID    = 0;
+    static constexpr int COL_NAME  = 1;
+    static constexpr int COL_COLOR = 2;
+    static constexpr int COL_PEERS = 3; // first peer column (Host, then per-peer)
+
+    QTableWidget*             table_;
+    QPushButton*              addBtn_;
+    QPushButton*              removeBtn_;
+    QList<TrackerConfig>      trackers_;
+    bool                      isAdminOrHost_ = false;
+    QStringList               peerNames_;
+    QMap<QString, QList<int>> peerAssignments_;
+    int                       activeId_      = -1;
+    bool                      updatingTable_ = false;
 };

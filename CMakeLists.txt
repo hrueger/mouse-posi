@@ -34,6 +34,7 @@ set(SOURCES
     src/ui/CollapsibleSection.cpp
     src/ui/SidebarWidget.cpp
     src/ui/TrackersPanel.cpp
+    src/ui/TrackerBar.cpp
     src/ui/NdiPanel.cpp
     src/ui/NetworkSettingsPanel.cpp
     src/ui/StatsPanel.cpp
@@ -54,6 +55,7 @@ set(HEADERS
     src/ui/CollapsibleSection.h
     src/ui/SidebarWidget.h
     src/ui/TrackersPanel.h
+    src/ui/TrackerBar.h
     src/ui/NdiPanel.h
     src/ui/NetworkSettingsPanel.h
     src/ui/StatsPanel.h

@@ -6,7 +6,6 @@
 #include <QResizeEvent>
 #include <QFont>
 #include <QFontMetrics>
-#include <QToolButton>
 #include <cmath>
 
 VideoWidget::VideoWidget(QWidget* parent) : QWidget(parent) {
@@ -15,15 +14,6 @@ VideoWidget::VideoWidget(QWidget* parent) : QWidget(parent) {
     setMinimumSize(320, 180);
     setFocusPolicy(Qt::NoFocus);
 
-    fullscreenBtn_ = new QToolButton(this);
-    fullscreenBtn_->setText("⛶");
-    fullscreenBtn_->setToolTip("Toggle Fullscreen");
-    fullscreenBtn_->setStyleSheet(
-        "QToolButton { background: rgba(0,0,0,120); color: white; border: none;"
-        " border-radius: 4px; padding: 4px 6px; font-size: 14px; }"
-        "QToolButton:hover { background: rgba(60,60,60,200); }");
-    fullscreenBtn_->resize(fullscreenBtn_->sizeHint());
-    connect(fullscreenBtn_, &QToolButton::clicked, this, &VideoWidget::fullscreenRequested);
 }
 
 void VideoWidget::setFrame(const QImage& frame) {
@@ -49,6 +39,11 @@ void VideoWidget::setActiveTracker(int id, const QColor& color) {
     activeTrackerId_ = id;
     activeColor_     = color;
     update();
+}
+
+void VideoWidget::setNdiSourceConfigured(bool configured) {
+    ndiSourceConfigured_ = configured;
+    if (scaledFrame_.isNull()) update();
 }
 
 void VideoWidget::setCalibrationMode(bool on) {
@@ -117,9 +112,7 @@ void VideoWidget::rebuildScaledFrame() {
 void VideoWidget::resizeEvent(QResizeEvent*) {
     updateScaling();
     rebuildScaledFrame();
-    // Keep fullscreen button anchored to top-right corner
-    const int margin = 8;
-    fullscreenBtn_->move(width() - fullscreenBtn_->width() - margin, margin);
+
 }
 
 QPointF VideoWidget::widgetToFrame(QPointF wpt) const {
@@ -337,21 +330,27 @@ void VideoWidget::paintEvent(QPaintEvent*) {
     p.setRenderHint(QPainter::Antialiasing);
     p.fillRect(rect(), Qt::black);
 
-    if (!scaledFrame_.isNull())
+    if (scaledFrame_.isNull()) {
+        p.setPen(QColor(100, 100, 100));
+        if (ndiSourceConfigured_) {
+            p.setFont(QFont("Arial", 18));
+            p.drawText(rect(), Qt::AlignCenter, "Waiting for video…");
+        } else {
+            p.setFont(QFont("Arial", 18, QFont::Bold));
+            p.drawText(rect().adjusted(0, 0, 0, -30), Qt::AlignCenter, "No video source");
+            p.setFont(QFont("Arial", 12));
+            p.setPen(QColor(70, 70, 70));
+            p.drawText(rect().adjusted(0, 30, 0, 0), Qt::AlignCenter,
+                       "Select an NDI source in the sidebar");
+        }
+    } else {
         p.drawPixmap(int(offset_.x()), int(offset_.y()), scaledFrame_);
+    }
 
     // Calibration overlay is always drawn, independent of calibration validity.
     drawCalibOverlay(p);
 
     if (!calibration_ || !calibration_->isValid()) {
-        bool hasCalibOverlay = hasCalibOrigin_ || !calibOverlayPoints_.isEmpty() || calibMode_;
-        if (!hasCalibOverlay) {
-            p.setPen(QColor(255, 200, 50));
-            p.setFont(QFont("Arial", 14));
-            p.drawText(rect().adjusted(12, 8, -12, -8),
-                       Qt::AlignTop | Qt::AlignLeft,
-                       "No calibration — open Setup → Calibration");
-        }
         if (activeTrackerId_ >= 0) {
             QPointF wpt = mouseWidgetPos_;
             p.setPen(QPen(activeColor_, mouseHeld_ ? 2.5 : 1.5,

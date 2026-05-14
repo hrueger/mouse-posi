@@ -19,6 +19,7 @@ class PsnReceiver;
 class SessionManager;
 class SidebarWidget;
 class TrackersPanel;
+class TrackerBar;
 class NdiPanel;
 class NetworkSettingsPanel;
 class StatsPanel;
@@ -42,7 +43,6 @@ protected:
 private slots:
     void onTimer();
     void onFrameReady(const QImage& frame);
-    void onTrackerChanged(int id, QColor color);
     void onNewProject();
     void onOpenProject();
     void onSaveProject();
@@ -50,17 +50,22 @@ private slots:
 
 private:
     void selectTracker(int id);
+    bool isTrackerAllowed(int id) const;
     void applyProject();
     void updateWindowTitle();
     void saveRecent(const QString& path);
     QStringList recentProjects() const;
     void updateStatsTimer();
     void updateSessionStatus();
+    void updateCalibStatus();
+    void updateTrackerBarRestriction();
+    void updateTrackersPanelPeers();
     void log(const QString& msg);
 
     VideoWidget*          video_;
     SidebarWidget*        sidebar_;
     TrackersPanel*        trackersPanel_;
+    TrackerBar*           trackerBar_;
     NdiPanel*             ndiPanel_;
     NetworkSettingsPanel* networkPanel_;
     StatsPanel*           statsPanel_;
@@ -85,6 +90,7 @@ private:
     QLabel*       statusPos_;
     QLabel*       statusTracker_;
     QLabel*       statusNdi_;
+    QLabel*       statusCalib_;
     QLabel*       statusSession_;
     QLabel*       statusPsnOut_;
     QPushButton*  leaveSessionBtn_;

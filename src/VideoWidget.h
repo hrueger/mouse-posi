@@ -6,7 +6,6 @@
 
 struct TrackerConfig;
 class Calibration;
-class QToolButton;
 
 class VideoWidget : public QWidget {
     Q_OBJECT
@@ -20,6 +19,7 @@ public:
 
 public slots:
     void setFrame(const QImage& frame);
+    void setNdiSourceConfigured(bool configured);
     void setRemotePositions(const QMap<int, QVector3D>& positions,
                             const QList<TrackerConfig>& trackers);
     void setOwnPositions(const QMap<int, QPair<float,float>>& positions,
@@ -97,6 +97,7 @@ private:
     QSizeF  scale_  = {1.0, 1.0};
     QPointF offset_ = {0.0, 0.0};
 
+    bool    ndiSourceConfigured_ = false;
     Calibration* calibration_ = nullptr;
 
     QList<QPointF> calibOverlayPoints_;
@@ -107,7 +108,6 @@ private:
     QList<QString> calibDistanceLabels_;
     QList<QPair<QPointF,QPointF>> calibExplicitLines_;
 
-    QToolButton* fullscreenBtn_;
 
 public:
     bool    mouseHeld()     const { return mouseHeld_; }

@@ -14,6 +14,7 @@ CollapsibleSection::CollapsibleSection(const QString& title, QWidget* parent)
 
     header_ = new QPushButton;
     header_->setFlat(true);
+    header_->setFocusPolicy(Qt::NoFocus);
     header_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     connect(header_, &QPushButton::clicked, this, &CollapsibleSection::toggleExpanded);
 

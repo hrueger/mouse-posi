@@ -7,6 +7,7 @@
 #include "ui/SidebarWidget.h"
 #include "ui/CollapsibleSection.h"
 #include "ui/TrackersPanel.h"
+#include "ui/TrackerBar.h"
 #include "ui/NdiPanel.h"
 #include "ui/NetworkSettingsPanel.h"
 #include "ui/StatsPanel.h"
@@ -16,6 +17,7 @@
 #include <QMenuBar>
 #include <QStatusBar>
 #include <QHBoxLayout>
+#include <QVBoxLayout>
 #include <QSplitter>
 #include <QWidget>
 #include <QCloseEvent>
@@ -43,19 +45,28 @@ MainWindow::MainWindow(NdiReceiver* ndi, QWidget* parent) : QMainWindow(parent) 
     setWindowTitle("mouse-posi");
     resize(1440, 810);
 
-    // ── Central layout: video + sidebar ──────────────────────────────────
+    // ── Central layout: tracker bar + (video + sidebar) ──────────────────
     video_ = new VideoWidget;
     video_->setCalibration(&calibration_);
 
     sidebar_ = new SidebarWidget;
+    trackerBar_ = new TrackerBar;
+
+    auto* leftPane = new QWidget;
+    auto* leftLayout = new QVBoxLayout(leftPane);
+    leftLayout->setContentsMargins(0, 0, 0, 0);
+    leftLayout->setSpacing(0);
+    leftLayout->addWidget(trackerBar_);
+    leftLayout->addWidget(video_);
 
     auto* splitter = new QSplitter(Qt::Horizontal);
     splitter->setChildrenCollapsible(false);
-    splitter->addWidget(video_);
+    splitter->addWidget(leftPane);
     splitter->addWidget(sidebar_);
     splitter->setStretchFactor(0, 1);
     splitter->setStretchFactor(1, 0);
     splitter->setSizes({1160, 280});
+
     setCentralWidget(splitter);
 
     // ── Sidebar panels ────────────────────────────────────────────────────
@@ -93,14 +104,18 @@ MainWindow::MainWindow(NdiReceiver* ndi, QWidget* parent) : QMainWindow(parent) 
     statusTracker_ = new QLabel("No tracker — press 1–9 to select");
     statusNdi_     = new QLabel("No NDI source");
     statusPos_     = new QLabel("--");
+    statusCalib_   = new QLabel;
     statusTracker_->setContentsMargins(4, 0, 8, 0);
     statusNdi_->setContentsMargins(8, 0, 8, 0);
     statusPos_->setContentsMargins(8, 0, 4, 0);
+    statusCalib_->setContentsMargins(8, 0, 4, 0);
     statusBar()->addWidget(statusTracker_);
     statusBar()->addWidget(makeSep());
     statusBar()->addWidget(statusNdi_);
     statusBar()->addWidget(makeSep());
     statusBar()->addWidget(statusPos_);
+    statusBar()->addWidget(makeSep());
+    statusBar()->addWidget(statusCalib_);
 
     statusPsnOut_ = new QLabel("● PSN Out");
     statusPsnOut_->setStyleSheet("color: #cc3333; padding: 0 8px;");
@@ -127,11 +142,13 @@ MainWindow::MainWindow(NdiReceiver* ndi, QWidget* parent) : QMainWindow(parent) 
     // ── Signal wiring ─────────────────────────────────────────────────────
     connect(ndi_, &NdiReceiver::frameReady, this, &MainWindow::onFrameReady);
 
-    connect(trackersPanel_, &TrackersPanel::activeTrackerChanged,
-            this, &MainWindow::onTrackerChanged);
+    connect(trackerBar_, &TrackerBar::trackerSelected,
+            this, [this](int id) { selectTracker(id); });
+
     connect(trackersPanel_, &TrackersPanel::trackersChanged,
             this, [this](const QList<TrackerConfig>& t) {
         project_.trackers = t;
+        trackerBar_->setTrackers(t);
         {
             QSet<int> validIds;
             for (const auto& tr : project_.trackers) validIds.insert(tr.id);
@@ -144,6 +161,11 @@ MainWindow::MainWindow(NdiReceiver* ndi, QWidget* parent) : QMainWindow(parent) 
             (sessionMgr_->state() == SessionManager::State::Joined &&
              sessionMgr_->localRole() == SessionRole::Admin))
             sessionMgr_->broadcastProjectState(project_);
+    });
+
+    connect(trackersPanel_, &TrackersPanel::trackerAccessChanged,
+            this, [this](const QString& peerName, const QList<int>& ids) {
+        sessionMgr_->setTrackerAccess(peerName, ids);
     });
 
     connect(ndiPanel_, &NdiPanel::sourceSelected, this, &MainWindow::setNdiSource);
@@ -169,6 +191,7 @@ MainWindow::MainWindow(NdiReceiver* ndi, QWidget* parent) : QMainWindow(parent) 
         if (cal.isValid()) calibration_.fromList(cal.homography);
         if (calibrationSection_ && cal.isValid())
             calibrationSection_->setExpanded(false);
+        updateCalibStatus();
         if (sessionMgr_->state() == SessionManager::State::Hosting ||
             (sessionMgr_->state() == SessionManager::State::Joined &&
              sessionMgr_->localRole() == SessionRole::Admin))
@@ -204,9 +227,11 @@ MainWindow::MainWindow(NdiReceiver* ndi, QWidget* parent) : QMainWindow(parent) 
             .arg(s.x(), 0, 'f', 4).arg(s.y(), 0, 'f', 4));
     });
 
-    connect(video_, &VideoWidget::fullscreenRequested, this, [this]() {
+    auto toggleFullscreen = [this]() {
         if (isFullScreen()) showNormal(); else showFullScreen();
-    });
+    };
+    connect(video_, &VideoWidget::fullscreenRequested, this, toggleFullscreen);
+    connect(trackerBar_, &TrackerBar::fullscreenClicked, this, toggleFullscreen);
 
     // ── Session system wiring ─────────────────────────────────────────────
     connect(sessionMgr_, &SessionManager::stateChanged, this,
@@ -220,6 +245,17 @@ MainWindow::MainWindow(NdiReceiver* ndi, QWidget* parent) : QMainWindow(parent) 
         if (state == SessionManager::State::Hosting)
             sessionMgr_->broadcastProjectState(project_);  // seed sharedProject_ before any peer joins
         updateSessionStatus();
+        updateTrackerBarRestriction();
+        updateTrackersPanelPeers();
+    });
+    connect(sessionMgr_, &SessionManager::peerJoined, this, [this](SessionPeer) {
+        updateTrackersPanelPeers();
+    });
+    connect(sessionMgr_, &SessionManager::peerLeft, this, [this](QString) {
+        updateTrackersPanelPeers();
+    });
+    connect(sessionMgr_, &SessionManager::peerRoleChanged, this, [this](SessionPeer) {
+        updateTrackersPanelPeers();
     });
     connect(sessionMgr_, &SessionManager::projectStateReceived,
             this, [this](Project p, int unassignedAlpha) {
@@ -233,6 +269,7 @@ MainWindow::MainWindow(NdiReceiver* ndi, QWidget* parent) : QMainWindow(parent) 
     connect(sessionMgr_, &SessionManager::trackerAccessReceived,
             this, [this](QList<int> ids) {
         video_->setAssignedTrackers(ids, sessionMgr_->unassignedAlpha());
+        updateTrackerBarRestriction();
     });
     connect(sessionMgr_, &SessionManager::unassignedAlphaChanged,
             this, [this](int alpha) {
@@ -344,19 +381,57 @@ void MainWindow::selectTracker(int id) {
         }
         if (!exists) {
             statusBar()->showMessage(
-                QString("Tracker %1 is not configured (add it in Trackers).")
-                    .arg(id),
+                QString("Tracker %1 is not configured (add it in Trackers).").arg(id),
                 4000);
             id = -1;
         }
     }
+    if (id >= 0 && !isTrackerAllowed(id)) {
+        statusBar()->showMessage(
+            QString("Tracker %1 is not assigned to you in this session.").arg(id), 3000);
+        return;
+    }
     trackersPanel_->setActiveTrackerId(id);
+    trackerBar_->setActiveTrackerId(id);
     QColor color = id >= 0 ? trackersPanel_->activeColor() : Qt::white;
     video_->setActiveTracker(id, color);
     if (id >= 0)
         statusTracker_->setText(QString("Tracker %1 — hold left mouse to send").arg(id));
     else
         statusTracker_->setText("No tracker — press 1–9 to select");
+}
+
+bool MainWindow::isTrackerAllowed(int id) const {
+    if (id < 0) return true;
+    auto state = sessionMgr_->state();
+    if (state != SessionManager::State::Joined) return true;
+    if (sessionMgr_->localRole() == SessionRole::Admin) return true;
+    return sessionMgr_->localAssignedTrackers().contains(id);
+}
+
+void MainWindow::updateTrackerBarRestriction() {
+    bool isUser = (sessionMgr_->state() == SessionManager::State::Joined &&
+                   sessionMgr_->localRole() == SessionRole::User);
+    if (isUser) {
+        trackerBar_->setAllowedTrackers(sessionMgr_->localAssignedTrackers());
+    } else {
+        trackerBar_->clearRestriction();
+    }
+}
+
+void MainWindow::updateTrackersPanelPeers() {
+    auto state = sessionMgr_->state();
+    bool isAdmin = (state == SessionManager::State::Hosting ||
+                    (state == SessionManager::State::Joined &&
+                     sessionMgr_->localRole() == SessionRole::Admin));
+
+    QStringList peerNames;
+    QMap<QString, QList<int>> assignments;
+    for (const auto& p : sessionMgr_->peers()) {
+        peerNames.append(p.displayName);
+        assignments[p.displayName] = p.assignedTrackerIds;
+    }
+    trackersPanel_->setSessionContext(isAdmin, peerNames, assignments);
 }
 
 void MainWindow::loadProject(const Project& p) {
@@ -367,13 +442,15 @@ void MainWindow::loadProject(const Project& p) {
 void MainWindow::setNdiSource(const QString& source) {
     project_.ndiSource = source;
     ndi_->connectToSource(source);
-    statusNdi_->setText("NDI: " + source + " (connecting…)");
+    statusNdi_->setText(source.isEmpty() ? "No NDI source" : "NDI: " + source + " (connecting…)");
     ndiPanel_->setCurrentSource(source);
+    video_->setNdiSourceConfigured(!source.isEmpty());
 }
 
 void MainWindow::applyProject() {
     updateWindowTitle();
     trackersPanel_->setTrackers(project_.trackers);
+    trackerBar_->setTrackers(project_.trackers);
     networkPanel_->setConfig(project_.network);
     psnSender_->configure(project_.network);
     if (kEnableIncomingPsn) {
@@ -386,6 +463,7 @@ void MainWindow::applyProject() {
         psnReceiver_->stop();
         psnReceiver_->wait();
     }
+    video_->setNdiSourceConfigured(!project_.ndiSource.isEmpty());
     if (!project_.ndiSource.isEmpty())
         setNdiSource(project_.ndiSource);
     if (project_.calibration.isValid()) {
@@ -400,6 +478,7 @@ void MainWindow::applyProject() {
         if (calibrationSection_)
             calibrationSection_->setExpanded(false);
     }
+    updateCalibStatus();
 }
 
 void MainWindow::updateWindowTitle() {
@@ -491,6 +570,16 @@ void MainWindow::updateStatsTimer() {
         sessionMgr_->peers().size());
 }
 
+void MainWindow::updateCalibStatus() {
+    if (calibration_.isValid()) {
+        statusCalib_->setText("Calibrated");
+        statusCalib_->setStyleSheet("color: palette(mid);");
+    } else {
+        statusCalib_->setText("No calibration");
+        statusCalib_->setStyleSheet("color: #cc9900;");
+    }
+}
+
 void MainWindow::updateSessionStatus() {
     auto state = sessionMgr_->state();
     bool isJoinedUser = state == SessionManager::State::Joined
@@ -533,11 +622,6 @@ void MainWindow::onFrameReady(const QImage& frame) {
         if (activeId >= 0) remote.remove(activeId);
     }
     video_->setRemotePositions(remote, project_.trackers);
-}
-
-void MainWindow::onTrackerChanged(int id, QColor color) {
-    video_->setActiveTracker(id, color);
-    statusTracker_->setText(QString("Tracker %1 — hold left mouse to send").arg(id));
 }
 
 void MainWindow::onNewProject() {
