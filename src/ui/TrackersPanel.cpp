@@ -85,6 +85,13 @@ QColor TrackersPanel::activeColor() const {
     return Qt::white;
 }
 
+void TrackersPanel::setCalibrationActive(bool on) {
+    calibActive_ = on;
+    table_->setSelectionMode(on ? QAbstractItemView::NoSelection
+                                : QAbstractItemView::SingleSelection);
+    if (on) table_->clearSelection();
+}
+
 void TrackersPanel::setSessionContext(bool isAdminOrHost,
                                        const QStringList& peerNames,
                                        const QMap<QString, QList<int>>& peerAssignments)

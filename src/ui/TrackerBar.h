@@ -15,6 +15,7 @@ public:
     void setActiveTrackerId(int id);
     void clearRestriction();
     void setAllowedTrackers(const QList<int>& ids);
+    void setCalibrationActive(bool on);
 
 signals:
     void trackerSelected(int id);
@@ -26,7 +27,8 @@ private:
     QHBoxLayout*         layout_;
     QPushButton*         fullscreenBtn_;
     QList<TrackerConfig> trackers_;
-    bool                 restricted_ = false;
+    bool                 restricted_   = false;
+    bool                 calibActive_  = false;
     QList<int>           allowedIds_;
     int                  activeId_ = -1;
     QList<QPushButton*>  buttons_;

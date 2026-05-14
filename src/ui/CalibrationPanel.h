@@ -28,6 +28,7 @@ public:
 
 signals:
     void calibrationChanged(CalibrationData cal);
+    void calibrationActiveChanged(bool active);
 
 private slots:
     void onCalibrateToggled(bool on);

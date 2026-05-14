@@ -55,7 +55,7 @@ void TrackerBar::setTrackers(const QList<TrackerConfig>& trackers) {
 void TrackerBar::setActiveTrackerId(int id) {
     activeId_ = id;
     for (int i = 0; i < buttons_.size() && i < trackers_.size(); ++i) {
-        buttons_[i]->setChecked(trackers_[i].id == id);
+        buttons_[i]->setChecked(!calibActive_ && trackers_[i].id == id);
     }
 }
 
@@ -73,6 +73,12 @@ void TrackerBar::setAllowedTrackers(const QList<int>& ids) {
     rebuild();
 }
 
+void TrackerBar::setCalibrationActive(bool on) {
+    if (calibActive_ == on) return;
+    calibActive_ = on;
+    rebuild();
+}
+
 void TrackerBar::rebuild() {
     layout_->removeWidget(fullscreenBtn_);
     while (layout_->count() > 0) {
@@ -83,11 +89,11 @@ void TrackerBar::rebuild() {
     buttons_.clear();
 
     for (const auto& t : trackers_) {
-        bool allowed = !restricted_ || allowedIds_.contains(t.id);
+        bool allowed = !calibActive_ && (!restricted_ || allowedIds_.contains(t.id));
 
         auto* btn = new QPushButton(QString("%1  %2").arg(t.id).arg(t.name));
         btn->setCheckable(true);
-        btn->setChecked(t.id == activeId_);
+        btn->setChecked(!calibActive_ && t.id == activeId_);
         btn->setEnabled(allowed);
         btn->setFixedHeight(28);
         btn->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);

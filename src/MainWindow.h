@@ -57,6 +57,7 @@ private slots:
 private:
     void selectTracker(int id);
     bool isTrackerAllowed(int id) const;
+    void setCalibrationActive(bool on);
     void applyProject();
     void updateWindowTitle();
     void saveRecent(const QString& path);
@@ -94,6 +95,7 @@ private:
     Project     project_;
     QString     projectPath_;
     Calibration calibration_;
+    bool        calibActive_ = false;
 
     QMap<int, QPair<float,float>> trackerPositions_;
 

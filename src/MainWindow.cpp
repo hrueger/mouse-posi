@@ -198,6 +198,9 @@ MainWindow::MainWindow(NdiReceiver* ndi, QWidget* parent) : QMainWindow(parent) 
         }
     });
 
+    connect(calibrationPanel_, &CalibrationPanel::calibrationActiveChanged,
+            this, &MainWindow::setCalibrationActive);
+
     connect(calibrationPanel_, &CalibrationPanel::calibrationChanged,
             this, [this](const CalibrationData& cal) {
         project_.calibration = cal;
@@ -410,7 +413,15 @@ void MainWindow::log(const QString& msg) {
     logStream_->flush();
 }
 
+void MainWindow::setCalibrationActive(bool on) {
+    calibActive_ = on;
+    if (on) selectTracker(-1);
+    trackerBar_->setCalibrationActive(on);
+    trackersPanel_->setCalibrationActive(on);
+}
+
 void MainWindow::selectTracker(int id) {
+    if (calibActive_ && id >= 0) return;
     if (id >= 0) {
         bool exists = false;
         for (const auto& t : project_.trackers) {

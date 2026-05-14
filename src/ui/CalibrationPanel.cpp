@@ -156,6 +156,7 @@ void CalibrationPanel::disconnectVideoSignals() {
 
 void CalibrationPanel::onCalibrateToggled(bool on) {
     active_ = on;
+    emit calibrationActiveChanged(on);
     calibrateBtn_->setText(on ? "Stop Calibration" : "Start Calibration");
     if (!video_) return;
     video_->setShowCalibrationOverlay(on);

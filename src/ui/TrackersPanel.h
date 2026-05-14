@@ -23,6 +23,7 @@ public:
     void setSessionContext(bool isAdminOrHost,
                            const QStringList& peerNames,
                            const QMap<QString, QList<int>>& peerAssignments);
+    void setCalibrationActive(bool on);
 
 signals:
     void trackersChanged(QList<TrackerConfig> trackers);
@@ -52,4 +53,5 @@ private:
     QMap<QString, QList<int>> peerAssignments_;
     int                       activeId_      = -1;
     bool                      updatingTable_ = false;
+    bool                      calibActive_   = false;
 };
