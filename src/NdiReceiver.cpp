@@ -50,6 +50,14 @@ void NdiReceiver::connectToSource(const QString& name) {
     }
 }
 
+void NdiReceiver::disconnectFromSource() {
+    {
+        QMutexLocker lk(&sourceMutex_);
+        targetSource_.clear();
+    }
+    reconnect_ = true;
+}
+
 void NdiReceiver::run() {
 #if NDI_AVAILABLE
     if (!NDIlib_initialize()) {
@@ -68,6 +76,12 @@ void NdiReceiver::run() {
         {
             QMutexLocker lk(&sourceMutex_);
             sourceName = targetSource_.toUtf8();
+        }
+
+        if (sourceName.isEmpty()) {
+            // No source selected — keep thread alive but idle.
+            msleep(100);
+            continue;
         }
 
         NDIlib_recv_create_v3_t desc = {};
@@ -103,6 +117,15 @@ void NdiReceiver::run() {
 #else
     // Emit a placeholder gray frame at ~30fps
     while (running_) {
+        QByteArray sourceName;
+        {
+            QMutexLocker lk(&sourceMutex_);
+            sourceName = targetSource_.toUtf8();
+        }
+        if (sourceName.isEmpty()) {
+            msleep(100);
+            continue;
+        }
         QImage img(1280, 720, QImage::Format_RGB32);
         img.fill(Qt::darkGray);
         emit frameReady(img);

@@ -1,9 +1,16 @@
 #include <QApplication>
 #include <QStyleHints>
+#ifdef HAVE_QT_DARWIN_CAMERA_PERMISSION_PLUGIN
+#  include <QtPlugin>
+#endif
 #include <oclero/qlementine/style/QlementineStyle.hpp>
 #include <oclero/qlementine/style/ThemeManager.hpp>
 #include "MainWindow.h"
 #include "NdiReceiver.h"
+
+#ifdef HAVE_QT_DARWIN_CAMERA_PERMISSION_PLUGIN
+Q_IMPORT_PLUGIN(QDarwinCameraPermissionPlugin)
+#endif
 
 int main(int argc, char* argv[]) {
     QApplication app(argc, argv);

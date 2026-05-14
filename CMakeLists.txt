@@ -6,11 +6,19 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 
-list(APPEND CMAKE_PREFIX_PATH "/opt/homebrew/opt/qtbase" "/opt/homebrew/opt/qtsvg")
+list(APPEND CMAKE_PREFIX_PATH "/opt/homebrew/opt/qtbase" "/opt/homebrew/opt/qtsvg" "/opt/homebrew/opt/qtmultimedia")
 set(Qt6Svg_DIR "/opt/homebrew/opt/qtsvg/lib/cmake/Qt6Svg" CACHE PATH "")
+set(Qt6Multimedia_DIR "/opt/homebrew/opt/qtmultimedia/lib/cmake/Qt6Multimedia" CACHE PATH "")
 
-find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Network Concurrent Svg)
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Network Concurrent Svg Multimedia)
 find_package(OpenCV REQUIRED COMPONENTS core calib3d imgproc)
+
+# Homebrew Qt splits modules across formulae; derive the Qt prefix from Qt6_DIR
+# so we can reference auxiliary artifacts (e.g. static permission plugins).
+set(_qt6_prefix "${Qt6_DIR}")
+get_filename_component(_qt6_prefix "${_qt6_prefix}" DIRECTORY) # .../lib/cmake
+get_filename_component(_qt6_prefix "${_qt6_prefix}" DIRECTORY) # .../lib
+get_filename_component(_qt6_prefix "${_qt6_prefix}" DIRECTORY) # .../<qt prefix>
 
 include(FetchContent)
 FetchContent_Declare(
@@ -26,6 +34,7 @@ set(SOURCES
     src/MainWindow.cpp
     src/VideoWidget.cpp
     src/NdiReceiver.cpp
+    src/WebcamCapture.cpp
     src/PsnSender.cpp
     src/PsnReceiver.cpp
     src/Calibration.cpp
@@ -35,7 +44,7 @@ set(SOURCES
     src/ui/SidebarWidget.cpp
     src/ui/TrackersPanel.cpp
     src/ui/TrackerBar.cpp
-    src/ui/NdiPanel.cpp
+    src/ui/StreamSourcePanel.cpp
     src/ui/NetworkSettingsPanel.cpp
     src/ui/StatsPanel.cpp
     src/ui/CalibrationPanel.cpp
@@ -48,6 +57,7 @@ set(HEADERS
     src/MainWindow.h
     src/VideoWidget.h
     src/NdiReceiver.h
+    src/WebcamCapture.h
     src/PsnSender.h
     src/PsnReceiver.h
     src/Calibration.h
@@ -56,7 +66,7 @@ set(HEADERS
     src/ui/SidebarWidget.h
     src/ui/TrackersPanel.h
     src/ui/TrackerBar.h
-    src/ui/NdiPanel.h
+    src/ui/StreamSourcePanel.h
     src/ui/NetworkSettingsPanel.h
     src/ui/StatsPanel.h
     src/ui/CalibrationPanel.h
@@ -116,9 +126,12 @@ target_link_libraries(mouse-posi PRIVATE
     Qt6::Widgets
     Qt6::Network
     Qt6::Concurrent
+    Qt6::Multimedia
     ${OpenCV_LIBS}
     qlementine
 )
+
+target_compile_definitions(mouse-posi PRIVATE WEBCAM_AVAILABLE=1)
 
 if(NDI_FOUND)
     target_include_directories(mouse-posi PRIVATE "${NDI_INCLUDE_DIR}")
@@ -130,18 +143,35 @@ if(NDI_FOUND)
             "${NDI_LIB}"
             "$<TARGET_FILE_DIR:mouse-posi>/libndi.dylib")
 else()
-    message(WARNING "NDI SDK not found — building in stub mode (placeholder frames only)")
-    target_compile_definitions(mouse-posi PRIVATE NDI_AVAILABLE=0)
+    message(FATAL_ERROR "NDI SDK not found. Install 'NDI SDK for Apple' (6.x) so CMake can find Processing.NDI.Lib.h and libndi.dylib.")
 endif()
 
 if(APPLE)
+    # Homebrew's qtbase ships permissions as static libs; import the camera one
+    # so Qt can handle QCameraPermission at runtime.
+    set(_qt_camera_perm_lib "${_qt6_prefix}/share/qt/plugins/permissions/libqdarwincamerapermission.a")
+    if(EXISTS "${_qt_camera_perm_lib}")
+        target_link_libraries(mouse-posi PRIVATE "${_qt_camera_perm_lib}")
+        target_compile_definitions(mouse-posi PRIVATE HAVE_QT_DARWIN_CAMERA_PERMISSION_PLUGIN=1)
+        message(STATUS "Linking Qt camera permission static plugin: ${_qt_camera_perm_lib}")
+    else()
+        message(WARNING "Qt camera permission plugin lib not found at ${_qt_camera_perm_lib} — webcam permission prompt may not work")
+    endif()
+
     set_target_properties(mouse-posi PROPERTIES
         MACOSX_BUNDLE TRUE
         MACOSX_BUNDLE_BUNDLE_NAME "Mouse Posi"
+        MACOSX_BUNDLE_INFO_PLIST "${CMAKE_SOURCE_DIR}/src/macos/Info.plist.in"
+        MACOSX_BUNDLE_GUI_IDENTIFIER "com.hrueger.mouse-posi"
+        MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}"
+        MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}"
+        MACOSX_BUNDLE_LONG_VERSION_STRING "${PROJECT_VERSION}"
     )
     target_sources(mouse-posi PRIVATE src/DnsSdBridge.mm)
     set_source_files_properties(src/DnsSdBridge.mm
         PROPERTIES COMPILE_FLAGS "-x objective-c++")
     find_library(FOUNDATION Foundation REQUIRED)
-    target_link_libraries(mouse-posi PRIVATE ${FOUNDATION})
+    find_library(AVFOUNDATION AVFoundation REQUIRED)
+    find_library(COREMEDIA CoreMedia REQUIRED)
+    target_link_libraries(mouse-posi PRIVATE ${FOUNDATION} ${AVFOUNDATION} ${COREMEDIA})
 endif()

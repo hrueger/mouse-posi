@@ -1,6 +1,7 @@
 #include "MainWindow.h"
 #include "VideoWidget.h"
 #include "NdiReceiver.h"
+#include "WebcamCapture.h"
 #include "PsnSender.h"
 #include "PsnReceiver.h"
 #include "SessionManager.h"
@@ -8,7 +9,7 @@
 #include "ui/CollapsibleSection.h"
 #include "ui/TrackersPanel.h"
 #include "ui/TrackerBar.h"
-#include "ui/NdiPanel.h"
+#include "ui/StreamSourcePanel.h"
 #include "ui/NetworkSettingsPanel.h"
 #include "ui/StatsPanel.h"
 #include "ui/CalibrationPanel.h"
@@ -73,19 +74,20 @@ MainWindow::MainWindow(NdiReceiver* ndi, QWidget* parent) : QMainWindow(parent) 
     // ── Sidebar panels ────────────────────────────────────────────────────
     ndi_         = ndi;
     ndi_->setParent(this);
+    webcam_      = new WebcamCapture(this);
     psnSender_   = new PsnSender(this);
     psnReceiver_ = new PsnReceiver(this);
     sessionMgr_  = new SessionManager(this);
 
     sessionPanel_    = new SessionPanel(sessionMgr_);
-    ndiPanel_        = new NdiPanel(ndi_);
+    streamPanel_     = new StreamSourcePanel(ndi_);
     calibrationPanel_= new CalibrationPanel(video_, ndi_, this);
     trackersPanel_   = new TrackersPanel;
     networkPanel_    = new NetworkSettingsPanel;
     statsPanel_      = new StatsPanel;
 
     sidebar_->addPanel("Session",         sessionPanel_,     false);
-    sidebar_->addPanel("NDI Source",      ndiPanel_,         true);
+    sidebar_->addPanel("Stream Source",   streamPanel_,      true);
     calibrationSection_ = sidebar_->addPanel("Calibration", calibrationPanel_, false);
     sidebar_->addPanel("Trackers",        trackersPanel_,    true);
     sidebar_->addPanel("Network",         networkPanel_,     false);
@@ -142,6 +144,7 @@ MainWindow::MainWindow(NdiReceiver* ndi, QWidget* parent) : QMainWindow(parent) 
 
     // ── Signal wiring ─────────────────────────────────────────────────────
     connect(ndi_, &NdiReceiver::frameReady, this, &MainWindow::onFrameReady);
+    connect(webcam_, &WebcamCapture::frameReady, this, &MainWindow::onWebcamFrameReady);
 
     connect(trackerBar_, &TrackerBar::trackerSelected,
             this, [this](int id) { selectTracker(id); });
@@ -169,7 +172,8 @@ MainWindow::MainWindow(NdiReceiver* ndi, QWidget* parent) : QMainWindow(parent) 
         sessionMgr_->setTrackerAccess(peerName, ids);
     });
 
-    connect(ndiPanel_, &NdiPanel::sourceSelected, this, &MainWindow::setNdiSource);
+    connect(streamPanel_, &StreamSourcePanel::ndiSourceSelected, this, &MainWindow::setNdiSource);
+    connect(streamPanel_, &StreamSourcePanel::webcamSourceSelected, this, &MainWindow::setWebcamSource);
 
     connect(networkPanel_, &NetworkSettingsPanel::configChanged,
             this, [this](const NetworkConfig& cfg) {
@@ -454,10 +458,35 @@ void MainWindow::loadProject(const Project& p) {
 
 void MainWindow::setNdiSource(const QString& source) {
     project_.ndiSource = source;
+
+    videoSourceKind_ = VideoSourceKind::Ndi;
+    videoSourceName_ = source;
+
+    webcam_->stop();
     ndi_->connectToSource(source);
     statusNdi_->setText(source.isEmpty() ? "No NDI source" : "NDI: " + source + " (connecting…)");
-    ndiPanel_->setCurrentSource(source);
+    streamPanel_->setCurrentNdiSource(source);
     video_->setNdiSourceConfigured(!source.isEmpty());
+}
+
+void MainWindow::setWebcamSource(const QString& device) {
+#if WEBCAM_AVAILABLE
+    videoSourceKind_ = VideoSourceKind::Webcam;
+    videoSourceName_ = device;
+
+    // Stop NDI decoding to reduce CPU/network usage when using the webcam.
+    ndi_->disconnectFromSource();
+
+    webcam_->setDeviceDescription(device);
+    webcam_->start();
+
+    statusNdi_->setText(device.isEmpty() ? "No webcam" : "Webcam: " + device + " (starting…)");
+    video_->setNdiSourceConfigured(!device.isEmpty());
+#else
+    (void)device;
+    statusNdi_->setText("Webcam support unavailable (install Qt Multimedia)");
+    video_->setNdiSourceConfigured(false);
+#endif
 }
 
 void MainWindow::applyProject() {
@@ -618,16 +647,33 @@ void MainWindow::updateSessionStatus() {
 }
 
 void MainWindow::onFrameReady(const QImage& frame) {
-    QSize sz(frame.width(), frame.height());
-    if (sz != lastNdiFrameSize_) {
-        log(QString("NDI_SIZE  %1x%2  (was %3x%4)")
-            .arg(sz.width()).arg(sz.height())
-            .arg(lastNdiFrameSize_.width()).arg(lastNdiFrameSize_.height()));
-        lastNdiFrameSize_ = sz;
-    }
-    video_->setFrame(frame);
+    if (videoSourceKind_ != VideoSourceKind::Ndi)
+        return;
+
+    handleVideoFrame(frame);
     statusNdi_->setText(QString("NDI: %1  %2×%3")
-        .arg(project_.ndiSource).arg(frame.width()).arg(frame.height()));
+        .arg(videoSourceName_).arg(frame.width()).arg(frame.height()));
+}
+
+void MainWindow::onWebcamFrameReady(const QImage& frame) {
+    if (videoSourceKind_ != VideoSourceKind::Webcam)
+        return;
+
+    handleVideoFrame(frame);
+    statusNdi_->setText(QString("Webcam: %1  %2×%3")
+        .arg(videoSourceName_).arg(frame.width()).arg(frame.height()));
+}
+
+void MainWindow::handleVideoFrame(const QImage& frame) {
+    QSize sz(frame.width(), frame.height());
+    if (sz != lastVideoFrameSize_) {
+        log(QString("VIDEO_SIZE  %1x%2  (was %3x%4)")
+            .arg(sz.width()).arg(sz.height())
+            .arg(lastVideoFrameSize_.width()).arg(lastVideoFrameSize_.height()));
+        lastVideoFrameSize_ = sz;
+    }
+
+    video_->setFrame(frame);
 
     auto remote = kEnableIncomingPsn ? psnReceiver_->remotePositions() : QMap<int, QVector3D>{};
     if (video_->mouseHeld()) {

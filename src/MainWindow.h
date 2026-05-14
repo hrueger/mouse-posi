@@ -14,13 +14,14 @@
 
 class VideoWidget;
 class NdiReceiver;
+class WebcamCapture;
 class PsnSender;
 class PsnReceiver;
 class SessionManager;
 class SidebarWidget;
 class TrackersPanel;
 class TrackerBar;
-class NdiPanel;
+class StreamSourcePanel;
 class NetworkSettingsPanel;
 class StatsPanel;
 class CalibrationPanel;
@@ -35,6 +36,7 @@ public:
 
     void loadProject(const Project& p);
     void setNdiSource(const QString& source);
+    void setWebcamSource(const QString& device);
 
 protected:
     void closeEvent(QCloseEvent*) override;
@@ -43,6 +45,7 @@ protected:
 private slots:
     void onTimer();
     void onFrameReady(const QImage& frame);
+    void onWebcamFrameReady(const QImage& frame);
     void onNewProject();
     void onOpenProject();
     void onSaveProject();
@@ -62,11 +65,13 @@ private:
     void updateTrackersPanelPeers();
     void log(const QString& msg);
 
+    void handleVideoFrame(const QImage& frame);
+
     VideoWidget*          video_;
     SidebarWidget*        sidebar_;
     TrackersPanel*        trackersPanel_;
     TrackerBar*           trackerBar_;
-    NdiPanel*             ndiPanel_;
+    StreamSourcePanel*    streamPanel_;
     NetworkSettingsPanel* networkPanel_;
     StatsPanel*           statsPanel_;
     CalibrationPanel*     calibrationPanel_;
@@ -74,6 +79,7 @@ private:
     CollapsibleSection*   calibrationSection_ = nullptr;
 
     NdiReceiver*  ndi_;
+    WebcamCapture* webcam_;
     PsnSender*    psnSender_;
     PsnReceiver*  psnReceiver_;
     SessionManager* sessionMgr_;
@@ -105,6 +111,10 @@ private:
     // Debug logging
     QFile   logFile_;
     QTextStream* logStream_ = nullptr;
-    QSize   lastNdiFrameSize_;
+    QSize   lastVideoFrameSize_;
     QMap<int, QPair<float,float>> lastLoggedPositions_;
+
+    enum class VideoSourceKind { Ndi, Webcam };
+    VideoSourceKind videoSourceKind_ = VideoSourceKind::Ndi;
+    QString         videoSourceName_;
 };

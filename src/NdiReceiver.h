@@ -13,6 +13,7 @@ public:
 
     void discoverSources();
     void connectToSource(const QString& name);
+    void disconnectFromSource();
     void stop();
 
 signals:

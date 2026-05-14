@@ -341,7 +341,7 @@ void VideoWidget::paintEvent(QPaintEvent*) {
             p.setFont(QFont("Arial", 12));
             p.setPen(QColor(70, 70, 70));
             p.drawText(rect().adjusted(0, 30, 0, 0), Qt::AlignCenter,
-                       "Select an NDI source in the sidebar");
+                       "Select a video source in the sidebar");
         }
     } else {
         p.drawPixmap(int(offset_.x()), int(offset_.y()), scaledFrame_);

@@ -13,7 +13,9 @@ operators' positions overlaid on the video.
 | macOS                    | 13+ (Ventura) | —                                                                           |
 | Xcode Command Line Tools | any recent    | `xcode-select --install`                                                    |
 | CMake                    | ≥ 3.25        | `brew install cmake`                                                        |
-| Qt 6                     | ≥ 6.4         | `brew install qt`                                                           |
+| Qt 6 (base)              | ≥ 6.4         | `brew install qtbase`                                                       |
+| Qt SVG                   | ≥ 6.4         | `brew install qtsvg`                                                        |
+| Qt Multimedia (webcam)   | ≥ 6.4         | `brew install qtmultimedia`                                                 |
 | OpenCV                   | ≥ 4           | `brew install opencv`                                                       |
 | NDI SDK for Apple        | 6.x           | [ndi.video](https://ndi.video/for-developers/ndi-sdk/) → _Download_ → macOS |
 
@@ -31,6 +33,9 @@ operators' positions overlaid on the video.
 # Clone / enter the project
 git clone <repo-url> mouse-posi && cd mouse-posi
 
+# Install dependencies (Homebrew)
+brew install cmake qtbase qtsvg qtmultimedia opencv
+
 # Configure (first time only)
 cmake -B build -DCMAKE_BUILD_TYPE=Release
 
@@ -46,6 +51,9 @@ open build/mouse-posi.app
 > **Tip:** If Qt or OpenCV are not on the default CMake search path, pass
 > `-DCMAKE_PREFIX_PATH=/opt/homebrew` (Homebrew Apple Silicon) or
 > `-DCMAKE_PREFIX_PATH=/usr/local` (Homebrew Intel).
+
+> If you installed missing Qt components after a failed configure, clear the cache:
+> `rm -f build/CMakeCache.txt` and re-run `cmake -S . -B build`.
 
 ---
 
@@ -153,6 +161,18 @@ Projects are saved as `.mposi` JSON files (**File → Save Project**). They cont
 ---
 
 ## Troubleshooting
+
+**CMake fails to find Qt6Multimedia**
+
+- Install Qt Multimedia via Homebrew: `brew install qtmultimedia`
+- Then re-run configure: `cmake -S . -B build`
+
+**CMake fails to find the NDI SDK**
+
+- Install “NDI SDK for Apple” (see above) and ensure it is present at `/Library/NDI SDK for Apple/`
+- Then re-run configure: `cmake -S . -B build`
+
+> Note: This project requires the NDI SDK to build (CMake will fail without it).
 
 **NDI source not found**
 
