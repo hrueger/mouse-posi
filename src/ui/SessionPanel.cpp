@@ -76,6 +76,7 @@ SessionPanel::SessionPanel(SessionManager* mgr, QWidget* parent)
     auto* joinedLayout = new QVBoxLayout(joinedPage);
     joinedLayout->setContentsMargins(0, 0, 0, 0);
     leaveBtn_ = new QPushButton("Leave Session");
+    leaveBtn_->setFocusPolicy(Qt::ClickFocus);
     joinedLayout->addWidget(leaveBtn_);
     joinedLayout->addStretch();
     stack_->addWidget(joinedPage);  // index 2
