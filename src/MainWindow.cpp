@@ -28,6 +28,7 @@
 #include <QMessageBox>
 #include <QPushButton>
 #include <QShortcut>
+#include <oclero/qlementine/widgets/AboutDialog.hpp>
 #include <QDir>
 #include <QFileInfo>
 #include <QAction>
@@ -350,6 +351,18 @@ MainWindow::MainWindow(NdiReceiver* ndi, QWidget* parent) : QMainWindow(parent) 
     actToggleSidebar->setShortcut(QKeySequence("Ctrl+\\"));
     connect(actToggleSidebar, &QAction::triggered, this, [this]() {
         sidebar_->setVisible(!sidebar_->isVisible());
+    });
+
+    auto* helpMenu  = menuBar()->addMenu("&Help");
+    auto* actAbout  = helpMenu->addAction("About mouse-posi...");
+    actAbout->setMenuRole(QAction::AboutRole);
+    connect(actAbout, &QAction::triggered, this, [this]() {
+        oclero::qlementine::AboutDialog dlg(this);
+        dlg.setApplicationName("mouse-posi");
+        dlg.setApplicationVersion("1.0");
+        dlg.setDescription("Camera-based mouse follow spot position tracker and PSN sender.");
+        dlg.setCopyright("© 2026 Hannes Rüger");
+        dlg.exec();
     });
 
     loadProject(Project::defaultProject());
