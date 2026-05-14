@@ -8,18 +8,21 @@ operators' positions overlaid on the video.
 
 ## Requirements
 
-| Dependency               | Version       | Install                                                                     |
-| ------------------------ | ------------- | --------------------------------------------------------------------------- |
-| macOS                    | 13+ (Ventura) | —                                                                           |
-| Xcode Command Line Tools | any recent    | `xcode-select --install`                                                    |
-| CMake                    | ≥ 3.25        | `brew install cmake`                                                        |
-| Qt 6 (base)              | ≥ 6.4         | `brew install qtbase`                                                       |
-| Qt SVG                   | ≥ 6.4         | `brew install qtsvg`                                                        |
-| Qt Multimedia (webcam)   | ≥ 6.4         | `brew install qtmultimedia`                                                 |
-| OpenCV                   | ≥ 4           | `brew install opencv`                                                       |
-| NDI SDK for Apple        | 6.x           | [ndi.video](https://ndi.video/for-developers/ndi-sdk/) → _Download_ → macOS |
+### macOS
 
-### NDI SDK installation
+| Dependency               | Version       | Install                                                                                                                                                  |
+| ------------------------ | ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| macOS                    | 13+ (Ventura) | —                                                                                                                                                        |
+| Xcode Command Line Tools | any recent    | `xcode-select --install`                                                                                                                                 |
+| CMake                    | ≥ 3.25        | `brew install cmake`                                                                                                                                     |
+| Qt 6 (base)              | ≥ 6.4         | `brew install qtbase`                                                                                                                                    |
+| Qt SVG                   | ≥ 6.4         | `brew install qtsvg`                                                                                                                                     |
+| Qt Multimedia (webcam)   | ≥ 6.4         | `brew install qtmultimedia`                                                                                                                              |
+| OpenCV                   | ≥ 4           | `brew install opencv`                                                                                                                                    |
+| NDI SDK for Apple        | 6.x           | [ndi.video](https://ndi.video/for-developers/ndi-sdk/) → _Download_ → macOS                                                                              |
+| Blackmagic DeckLink SDK  | 16.x          | [blackmagicdesign.com](https://www.blackmagicdesign.com/developer/product/capture-and-playback) → _Download_ → macOS (headers bundled in `third_party/`) |
+
+#### NDI SDK (macOS)
 
 1. Download "NDI SDK for Apple" from ndi.video and run the installer.
 2. The installer places the SDK at `/Library/NDI SDK for Apple/`.
@@ -27,16 +30,71 @@ operators' positions overlaid on the video.
 
 ---
 
+### Windows
+
+| Dependency                    | Version | Install                                                                                                                                               |
+| ----------------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Windows                       | 10 / 11 | —                                                                                                                                                     |
+| Visual Studio Build Tools     | 2022    | `winget install Microsoft.VisualStudio.2022.BuildTools` — select **Desktop development with C++** workload                                            |
+| CMake                         | ≥ 3.25  | `winget install Kitware.CMake`                                                                                                                        |
+| Qt 6                          | 6.8.3   | `pip install aqtinstall` then see below                                                                                                               |
+| OpenCV                        | ≥ 4     | via vcpkg — see below                                                                                                                                 |
+| NDI SDK for Windows           | 6.x     | [ndi.video](https://ndi.video/for-developers/ndi-sdk/) → _Download_ → Windows                                                                         |
+| Blackmagic Desktop Video SDK  | 16.x    | [blackmagicdesign.com](https://www.blackmagicdesign.com/developer/product/capture-and-playback) → headers in `third_party/decklink/Win/include/`      |
+| Apple Bonjour SDK for Windows | any     | [developer.apple.com](https://developer.apple.com/download/all/?q=Bonjour+SDK+for+Windows) — install to default path (`C:\Program Files\Bonjour SDK`) |
+
+#### Qt 6 (Windows)
+
+Install via `aqtinstall` (no Qt account required):
+
+```bat
+pip install aqtinstall
+python -m aqt install-qt windows desktop 6.8.3 win64_msvc2022_64 -m qtmultimedia --outputdir C:\Qt
+```
+
+Qt ends up at `C:\Qt\6.8.3\msvc2022_64`. Pass this to CMake via `-DCMAKE_PREFIX_PATH`.
+
+#### OpenCV (Windows)
+
+```powershell
+winget install Microsoft.Vcpkg
+vcpkg integrate install
+# On ARM64 Windows you must set the host triplet to avoid a build failure:
+vcpkg install opencv:x64-windows --host-triplet=x64-windows
+```
+
+Pass `-DCMAKE_TOOLCHAIN_FILE="C:\vcpkg\scripts\buildsystems\vcpkg.cmake"` to CMake (see configure command below). You also need to add `C:\vcpkg\installed\x64-windows` to `CMAKE_PREFIX_PATH` so CMake can locate the OpenCV config files.
+
+#### NDI SDK (Windows)
+
+1. Download "NDI 6 SDK for Windows" from ndi.video and run the installer.
+2. The installer places the SDK at `C:\Program Files (x86)\NDI\NDI 6 SDK` — CMake finds it automatically.
+   Alternatively set `NDI_SDK_DIR` environment variable to the SDK root.
+
+#### Blackmagic DeckLink SDK (Windows)
+
+1. Download the DeckLink SDK from Blackmagic Design (link above).
+2. From the archive, copy everything in `Win/include/` to `third_party/decklink/Win/include/`.
+3. Generate the COM headers using `midl.exe` (included in the Windows SDK):
+    ```bat
+    set MIDL="C:\Program Files (x86)\Windows Kits\10\bin\10.0.22621.0\x64\midl.exe"
+    set INC=third_party\decklink\Win\include
+    %MIDL% /nologo /W1 /char signed /env x64 /h DeckLinkAPI.h /iid DeckLinkAPI_i.c /tlb DeckLinkAPI.tlb /out %INC% /I %INC% /I "C:\Program Files (x86)\Windows Kits\10\Include\10.0.22621.0\um" /I "C:\Program Files (x86)\Windows Kits\10\Include\10.0.22621.0\shared" %INC%\DeckLinkAPI.idl
+    ```
+    This generates `DeckLinkAPI.h` and `DeckLinkAPI_i.c` in `third_party/decklink/Win/include/`.
+    _(These generated files are already committed — only redo this if you update the SDK.)_
+
+---
+
 ## Build
 
-```bash
-# Clone / enter the project
-git clone <repo-url> mouse-posi && cd mouse-posi
+### macOS
 
+```bash
 # Install dependencies (Homebrew)
 brew install cmake qtbase qtsvg qtmultimedia opencv
 
-# Configure (first time only)
+# Configure
 cmake -B build -DCMAKE_BUILD_TYPE=Release
 
 # Build
@@ -44,16 +102,55 @@ cmake --build build --parallel
 
 # Run
 open build/mouse-posi.app
-# or directly:
-./build/mouse-posi.app/Contents/MacOS/mouse-posi
 ```
 
-> **Tip:** If Qt or OpenCV are not on the default CMake search path, pass
-> `-DCMAKE_PREFIX_PATH=/opt/homebrew` (Homebrew Apple Silicon) or
-> `-DCMAKE_PREFIX_PATH=/usr/local` (Homebrew Intel).
+> **Tip:** If Qt or OpenCV are not found, pass
+> `-DCMAKE_PREFIX_PATH=/opt/homebrew` (Apple Silicon) or `/usr/local` (Intel).
 
-> If you installed missing Qt components after a failed configure, clear the cache:
-> `rm -f build/CMakeCache.txt` and re-run `cmake -S . -B build`.
+> If you added missing components after a failed configure, clear the cache first:
+> `rm -f build/CMakeCache.txt`
+
+### Windows
+
+Open **PowerShell** (or a Developer Command Prompt for VS 2022):
+
+```powershell
+cmake -S . -B build `
+  -A x64 `
+  -DCMAKE_BUILD_TYPE=Release `
+  "-DCMAKE_PREFIX_PATH=C:\Qt\6.8.3\msvc2022_64;C:\vcpkg\installed\x64-windows" `
+  -DCMAKE_TOOLCHAIN_FILE="C:\vcpkg\scripts\buildsystems\vcpkg.cmake"
+
+cmake --build build --config Release --parallel
+```
+
+The built executable is at `build\Release\mouse-posi.exe`.
+
+After building, deploy the Qt runtime DLLs next to the exe (only needed once):
+
+```powershell
+C:\Qt\6.8.3\msvc2022_64\bin\windeployqt.exe build\Release\mouse-posi.exe
+```
+
+> **ARM64 Windows (e.g. Apple Silicon Mac running Windows in a VM):**
+> The default MSVC toolset may be too old to cross-compile for x64. Add
+> `-T version=14.41,host=ARM64` to the cmake configure command:
+> ```powershell
+> cmake -S . -B build -A x64 "-T version=14.41,host=ARM64" ...
+> ```
+> Also ensure you installed the **MSVC v143 build tools** component with x64
+> target support in the VS 2022 BuildTools installer.
+
+> **Network share (VM shared folder):** If the source tree lives on a mapped
+> network drive, git may refuse to clone the qlementine FetchContent dependency.
+> Run once to allow it:
+> ```powershell
+> git config --global --add safe.directory "%(prefix)///Mac/Home/source/ai_experiments/mouse-posi/build/_deps/qlementine-src"
+> ```
+> Adjust the path to match your actual mount point.
+
+> Clear the CMake cache after installing missing dependencies:
+> `Remove-Item -Recurse -Force build`
 
 ---
 
@@ -185,6 +282,26 @@ Projects are saved as `.mposi` JSON files (**File → Save Project**). They cont
 - Check the multicast IP and port match the grandMA PSN input plugin settings.
 - Verify multicast routing on your network (try unicast mode as a workaround).
 - Use Wireshark to confirm packets are leaving the machine on port 56565.
+
+**Windows: "Qt6Multimedia.dll not found" when launching**
+
+Run `windeployqt` as shown in the build steps above. This copies all required Qt DLLs and plugins into the `build\Release\` folder next to the exe.
+
+**Windows: CMake fails to find OpenCV even with vcpkg**
+
+Make sure both the Qt path and the vcpkg installed path are in `CMAKE_PREFIX_PATH`, separated by a semicolon:
+```
+-DCMAKE_PREFIX_PATH="C:\Qt\6.8.3\msvc2022_64;C:\vcpkg\installed\x64-windows"
+```
+Do not rely on the `%VCPKG_ROOT%` environment variable in PowerShell — use `$env:VCPKG_ROOT` or a literal path instead.
+
+**Windows: NDI SDK not found by CMake**
+
+The installer places the SDK at `C:\Program Files (x86)\NDI\NDI 6 SDK` (note the `(x86)` path). CMake searches this location automatically. If you installed it elsewhere, set the `NDI_SDK_DIR` environment variable to the SDK root before running cmake.
+
+**Windows ARM64: "No CMAKE_CXX_COMPILER could be found" with `-A x64`**
+
+The default MSVC toolset (14.34) bundled with some BuildTools installs lacks the ARM64→x64 cross-compiler. Add `-T version=14.41,host=ARM64` to select the newer toolset that includes it. Verify it is installed by checking that `C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.41.xxxxx\bin\Hostarm64\x64\cl.exe` exists.
 
 **High CPU usage**
 

@@ -1,4 +1,7 @@
 #include <QApplication>
+#ifdef Q_OS_WIN
+#  include <objbase.h>
+#endif
 #include <QStyleHints>
 #ifdef HAVE_QT_DARWIN_CAMERA_PERMISSION_PLUGIN
 #  include <QtPlugin>
@@ -13,6 +16,9 @@ Q_IMPORT_PLUGIN(QDarwinCameraPermissionPlugin)
 #endif
 
 int main(int argc, char* argv[]) {
+#ifdef Q_OS_WIN
+    CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+#endif
     QApplication app(argc, argv);
     app.setApplicationName("mouse-posi");
     app.setOrganizationName("mouse-posi");

@@ -17,6 +17,17 @@ static constexpr BMDVideoInputFlags kVideoFlags = bmdVideoInputEnableFormatDetec
 static QString hresultToString(HRESULT hr) {
     return QStringLiteral("0x%1").arg(quintptr(hr), 0, 16);
 }
+
+static IDeckLinkIterator* createIterator() {
+#ifdef Q_OS_WIN
+    IDeckLinkIterator* it = nullptr;
+    CoCreateInstance(CLSID_CDeckLinkIterator, nullptr, CLSCTX_ALL,
+                     IID_IDeckLinkIterator, reinterpret_cast<void**>(&it));
+    return it;
+#else
+    return CreateDeckLinkIteratorInstance();
+#endif
+}
 }
 
 class DeckLinkCapture::InputCallback final : public IDeckLinkInputCallback {
@@ -33,9 +44,14 @@ public:
         if (!ppv) return E_INVALIDARG;
         *ppv = nullptr;
 
+#ifdef Q_OS_WIN
+        if (IsEqualIID(iid, IID_IDeckLinkInputCallback) ||
+            IsEqualIID(iid, IID_IUnknown)) {
+#else
         const REFIID iunknown = CFUUIDGetUUIDBytes(IUnknownUUID);
         if (DeckLinkCapture::refiidEqual(iid, IID_IDeckLinkInputCallback) ||
             DeckLinkCapture::refiidEqual(iid, iunknown)) {
+#endif
             *ppv = static_cast<IDeckLinkInputCallback*>(this);
             AddRef();
             return S_OK;
@@ -157,7 +173,7 @@ QStringList DeckLinkCapture::listDevices(QString* error) {
 
     QStringList out;
 
-    IDeckLinkIterator* it = CreateDeckLinkIteratorInstance();
+    IDeckLinkIterator* it = createIterator();
     if (!it) {
         if (error)
             *error = QStringLiteral("DeckLink API not found. Install Blackmagic Desktop Video.");
@@ -166,11 +182,17 @@ QStringList DeckLinkCapture::listDevices(QString* error) {
 
     IDeckLink* deckLink = nullptr;
     while (it->Next(&deckLink) == S_OK && deckLink) {
+#ifdef Q_OS_WIN
+        BSTR bstrName = nullptr;
+        if (deckLink->GetDisplayName(&bstrName) == S_OK)
+            out.append(bstrToQString(bstrName));
+#else
         CFStringRef cfName = nullptr;
         if (deckLink->GetDisplayName(&cfName) == S_OK && cfName) {
             out.append(cfStringToQString(cfName));
             CFRelease(cfName);
         }
+#endif
         deckLink->Release();
         deckLink = nullptr;
     }
@@ -188,7 +210,7 @@ void DeckLinkCapture::start() {
         return;
     }
 
-    IDeckLinkIterator* it = CreateDeckLinkIteratorInstance();
+    IDeckLinkIterator* it = createIterator();
     if (!it) {
         emit errorChanged(QStringLiteral("DeckLink API not found. Install Blackmagic Desktop Video."));
         return;
@@ -196,12 +218,18 @@ void DeckLinkCapture::start() {
 
     IDeckLink* deckLink = nullptr;
     while (it->Next(&deckLink) == S_OK && deckLink) {
-        CFStringRef cfName = nullptr;
         QString name;
+#ifdef Q_OS_WIN
+        BSTR bstrName = nullptr;
+        if (deckLink->GetDisplayName(&bstrName) == S_OK)
+            name = bstrToQString(bstrName);
+#else
+        CFStringRef cfName = nullptr;
         if (deckLink->GetDisplayName(&cfName) == S_OK && cfName) {
             name = cfStringToQString(cfName);
             CFRelease(cfName);
         }
+#endif
 
         if (!name.isEmpty() && name == deviceName_) {
             deckLink_ = deckLink;
@@ -314,6 +342,17 @@ void DeckLinkCapture::handleFormatChanged(IDeckLinkDisplayMode* newDisplayMode,
     }, Qt::QueuedConnection);
 }
 
+#ifdef Q_OS_WIN
+
+QString DeckLinkCapture::bstrToQString(BSTR bstr) {
+    if (!bstr) return {};
+    QString s = QString::fromWCharArray(bstr);
+    SysFreeString(bstr);
+    return s;
+}
+
+#else
+
 QString DeckLinkCapture::cfStringToQString(CFStringRef s) {
     if (!s) return {};
 
@@ -332,6 +371,8 @@ QString DeckLinkCapture::cfStringToQString(CFStringRef s) {
 bool DeckLinkCapture::refiidEqual(REFIID a, REFIID b) {
     return std::memcmp(&a, &b, sizeof(REFIID)) == 0;
 }
+
+#endif
 
 #else
 

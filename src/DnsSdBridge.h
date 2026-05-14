@@ -2,8 +2,9 @@
 #include <QObject>
 #include <QString>
 
-// macOS NSNetService/NSNetServiceBrowser wrapper.
-// Implementation in DnsSdBridge.mm (Objective-C++).
+// DNS-SD / mDNS service advertisement and discovery.
+// macOS: implemented in DnsSdBridge.mm (NSNetService / Objective-C++).
+// Windows: implemented in DnsSdBridge_win.cpp (dns_sd C API via Bonjour SDK).
 class DnsSdBridge : public QObject {
     Q_OBJECT
 public:
@@ -22,5 +23,5 @@ signals:
     void advertiseError(QString message);
 
 private:
-    void* impl_ = nullptr; // opaque Obj-C object
+    void* impl_ = nullptr; // opaque platform handle
 };

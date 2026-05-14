@@ -1,3 +1,4 @@
+#define NOMINMAX
 #include "MainWindow.h"
 #include "VideoWidget.h"
 #include "NdiReceiver.h"

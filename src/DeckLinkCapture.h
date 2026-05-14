@@ -44,7 +44,11 @@ private:
     void handleFormatChanged(IDeckLinkDisplayMode* newDisplayMode,
                              BMDDetectedVideoInputFormatFlags detectedFlags);
 
+#ifdef Q_OS_WIN
+    static QString bstrToQString(BSTR bstr);
+#else
     static QString cfStringToQString(CFStringRef s);
     static bool    refiidEqual(REFIID a, REFIID b);
+#endif
 #endif
 };
