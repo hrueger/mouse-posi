@@ -178,6 +178,9 @@ void WebcamCapture::rebuildCamera() {
     }
 
     camera_ = new QCamera(device, this);
+    connect(camera_, &QCamera::errorOccurred, this, [this](QCamera::Error, const QString& errStr) {
+        emit errorChanged(errStr);
+    });
 
     const QCameraFormat fmt = choosePreferredFormat(device);
     if (!fmt.isNull())

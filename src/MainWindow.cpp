@@ -149,6 +149,10 @@ MainWindow::MainWindow(NdiReceiver* ndi, QWidget* parent) : QMainWindow(parent) 
     // ── Signal wiring ─────────────────────────────────────────────────────
     connect(ndi_, &NdiReceiver::frameReady, this, &MainWindow::onFrameReady);
     connect(webcam_, &WebcamCapture::frameReady, this, &MainWindow::onWebcamFrameReady);
+    connect(webcam_, &WebcamCapture::errorChanged, this, [this](const QString& err) {
+        if (videoSourceKind_ == VideoSourceKind::Webcam && !err.isEmpty())
+            statusNdi_->setText("Webcam error: " + err);
+    });
     connect(decklink_, &DeckLinkCapture::frameReady, this, &MainWindow::onDecklinkFrameReady);
 
     connect(trackerBar_, &TrackerBar::trackerSelected,
