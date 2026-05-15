@@ -199,17 +199,26 @@ endif()
 
 # ── Apple-specific ────────────────────────────────────────────────────────────
 if(APPLE)
-    # Homebrew's qtbase ships permissions as static libs; import the camera one
-    # so Qt can handle QCameraPermission at runtime.
-    set(_qt_camera_perm_lib
-        "${_qt6_prefix}/share/qt/plugins/permissions/libqdarwincamerapermission.a")
-    if(EXISTS "${_qt_camera_perm_lib}")
-        target_link_libraries(mouse-posi PRIVATE "${_qt_camera_perm_lib}")
+    # Load the camera permission plugin via its cmake target (Qt 6.5+).
+    # The target carries INTERFACE_LINK_OPTIONS with -Wl,-u,_QDarwinCameraPermissionRequest
+    # which prevents the macOS dead-stripper from removing the ObjC class that
+    # drives the AVFoundation permission request.  That flag is gated on the
+    # consuming target having _qt_has_QDarwinCameraPermissionPlugin_usage_description
+    # set (normally done by qt_add_executable); we set it here manually because
+    # we know our Info.plist.in contains NSCameraUsageDescription.
+    get_filename_component(_qt6_cmake_parent "${Qt6_DIR}" DIRECTORY)
+    find_package(Qt6QDarwinCameraPermissionPlugin QUIET
+        PATHS "${_qt6_cmake_parent}/Qt6Core"
+        NO_DEFAULT_PATH)
+    if(TARGET Qt6::QDarwinCameraPermissionPlugin)
+        set_target_properties(mouse-posi PROPERTIES
+            _qt_has_QDarwinCameraPermissionPlugin_usage_description TRUE)
+        target_link_libraries(mouse-posi PRIVATE Qt6::QDarwinCameraPermissionPlugin)
         target_compile_definitions(mouse-posi PRIVATE HAVE_QT_DARWIN_CAMERA_PERMISSION_PLUGIN=1)
-        message(STATUS "Linking Qt camera permission static plugin: ${_qt_camera_perm_lib}")
+        message(STATUS "Found Qt Darwin camera permission plugin")
     else()
         message(WARNING
-            "Qt camera permission plugin not found at ${_qt_camera_perm_lib} "
+            "Qt camera permission plugin not found in ${_qt6_cmake_parent}/Qt6Core "
             "— webcam permission prompt may not work")
     endif()
 
