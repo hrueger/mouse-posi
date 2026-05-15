@@ -9,6 +9,8 @@
 #  include <QVideoSink>
 #  include <QVideoFrame>
 #  include <QDateTime>
+#  include <QCoreApplication>
+#  include <QPermission>
 #endif
 
 WebcamCapture::WebcamCapture(QObject* parent) : QObject(parent) {}
@@ -37,6 +39,18 @@ QString WebcamCapture::deviceDescription() const {
 
 void WebcamCapture::start() {
 #if WEBCAM_AVAILABLE
+    QCameraPermission perm;
+    switch (qApp->checkPermission(perm)) {
+    case Qt::PermissionStatus::Undetermined:
+        qApp->requestPermission(perm, this, &WebcamCapture::start);
+        return;
+    case Qt::PermissionStatus::Denied:
+        emit errorChanged(QStringLiteral("Camera permission denied"));
+        return;
+    case Qt::PermissionStatus::Granted:
+        break;
+    }
+
     if (!camera_)
         rebuildCamera();
 
