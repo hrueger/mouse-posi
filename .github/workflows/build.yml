@@ -130,18 +130,21 @@ jobs:
           modules: "qtmultimedia"
           cache: true
 
-      - name: Cache vcpkg OpenCV
+      - name: Cache OpenCV
         uses: actions/cache@v4
-        id: vcpkg-cache
+        id: opencv-cache
         with:
-          path: C:\vcpkg\installed
-          key: vcpkg-opencv-x64-windows-${{ hashFiles('CMakeLists.txt') }}
+          path: C:\opencv
+          key: opencv-4.10.0-windows-x64
 
       - name: Install OpenCV
-        if: steps.vcpkg-cache.outputs.cache-hit != 'true'
+        if: steps.opencv-cache.outputs.cache-hit != 'true'
+        shell: pwsh
         run: |
-          $env:VCPKG_DEFAULT_HOST_TRIPLET = "x64-windows"
-          & "C:\vcpkg\vcpkg.exe" install opencv:x64-windows
+          Invoke-WebRequest `
+            "https://github.com/opencv/opencv/releases/download/4.10.0/opencv-4.10.0-windows.exe" `
+            -OutFile "$env:RUNNER_TEMP\opencv.exe"
+          & "$env:RUNNER_TEMP\opencv.exe" -o"C:\" -y
 
       - name: Install NDI SDK
         # The NDI installer is Inno Setup (no /S flag); use innoextract to unpack
@@ -199,8 +202,8 @@ jobs:
         run: |
           cmake -S . -B build -A x64 `
             -DCMAKE_BUILD_TYPE=Release `
-            "-DCMAKE_PREFIX_PATH=$env:QTDIR;C:\vcpkg\installed\x64-windows" `
-            -DCMAKE_TOOLCHAIN_FILE="C:\vcpkg\scripts\buildsystems\vcpkg.cmake"
+            "-DCMAKE_PREFIX_PATH=$env:QTDIR" `
+            "-DOpenCV_DIR=C:\opencv\build"
 
       - name: Build
         run: cmake --build build --config Release --parallel
@@ -209,6 +212,7 @@ jobs:
         run: |
           & "$env:QTDIR\bin\windeployqt.exe" --release --compiler-runtime "build\Release\mouse-posi.exe"
           Copy-Item "C:\Windows\System32\dnssd.dll" "build\Release\" -Force
+          Copy-Item "C:\opencv\build\x64\vc16\bin\opencv_world410.dll" "build\Release\" -Force
 
       - name: Create installer
         run: |
