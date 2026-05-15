@@ -10,6 +10,7 @@ set(CMAKE_AUTORCC ON)
 # Homebrew (Apple only); on Windows, set CMAKE_PREFIX_PATH to your Qt install.
 if(APPLE)
     list(APPEND CMAKE_PREFIX_PATH
+        "/opt/homebrew/opt/qt"
         "/opt/homebrew/opt/qtbase"
         "/opt/homebrew/opt/qtsvg"
         "/opt/homebrew/opt/qtmultimedia")
@@ -259,11 +260,13 @@ if(WIN32)
     # set BONJOUR_SDK_HOME to its install directory.
     find_path(BONJOUR_INCLUDE_DIR dns_sd.h
         PATHS
+            "${CMAKE_SOURCE_DIR}/third_party/bonjour/Include"
             "C:/Program Files/Bonjour SDK/Include"
             "$ENV{BONJOUR_SDK_HOME}/Include"
         NO_DEFAULT_PATH)
     find_library(BONJOUR_LIB dnssd
         PATHS
+            "${CMAKE_SOURCE_DIR}/third_party/bonjour/Lib/x64"
             "C:/Program Files/Bonjour SDK/Lib/x64"
             "C:/Program Files/Bonjour SDK/Lib/Win32"
             "$ENV{BONJOUR_SDK_HOME}/Lib/x64"

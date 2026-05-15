@@ -1,0 +1,232 @@
+name: Build
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to release (e.g. v1.0.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  # ─────────────────────────────────────────────────────────────────────────────
+  build-macos:
+    name: macOS ARM
+    runs-on: macos-14
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref }}
+
+      - name: Install Homebrew dependencies
+        run: brew install cmake qt opencv
+
+      - name: Install NDI SDK
+        run: |
+          curl -L "${{ secrets.NDI_SDK_URL_MAC }}" -o ndi-sdk.pkg
+          sudo installer -pkg ndi-sdk.pkg -target /
+
+      - name: Import signing certificate
+        # Requires secrets: APPLE_CERTIFICATE (base64 .p12), APPLE_CERTIFICATE_PASSWORD
+        if: ${{ env.APPLE_CERTIFICATE != '' }}
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          KEYCHAIN_PATH=$RUNNER_TEMP/build.keychain
+          KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
+          echo "$APPLE_CERTIFICATE" | base64 --decode > $RUNNER_TEMP/certificate.p12
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$RUNNER_TEMP/certificate.p12" -k "$KEYCHAIN_PATH" \
+            -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security list-keychain -d user -s "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+      - name: Configure
+        run: |
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH="$(brew --prefix qt);$(brew --prefix opencv)"
+
+      - name: Build
+        run: cmake --build build --parallel $(sysctl -n hw.logicalcpu)
+
+      - name: Bundle
+        run: |
+          "$(brew --prefix qt)/bin/macdeployqt" build/mouse-posi.app
+
+      - name: Sign
+        # Skipped if APPLE_SIGNING_IDENTITY secret is not set.
+        if: ${{ env.APPLE_SIGNING_IDENTITY != '' }}
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          codesign --force --options runtime --deep \
+            --sign "$APPLE_SIGNING_IDENTITY" \
+            build/mouse-posi.app
+
+      - name: Create DMG
+        run: |
+          hdiutil create \
+            -volname "Mouse Posi" \
+            -srcfolder build/mouse-posi.app \
+            -ov -format UDZO \
+            MousePosi.dmg
+
+      - name: Sign DMG
+        if: ${{ env.APPLE_SIGNING_IDENTITY != '' }}
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: codesign --sign "$APPLE_SIGNING_IDENTITY" MousePosi.dmg
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MousePosi-macOS
+          path: MousePosi.dmg
+          if-no-files-found: error
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  build-windows:
+    name: Windows x64
+    runs-on: windows-2022
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref }}
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v3
+        with:
+          version: "6.8.3"
+          host: windows
+          target: desktop
+          arch: win64_msvc2022_64
+          modules: "qtmultimedia qtsvg"
+          cache: true
+
+      - name: Cache vcpkg OpenCV
+        uses: actions/cache@v4
+        id: vcpkg-cache
+        with:
+          path: C:\vcpkg\installed
+          key: vcpkg-opencv-x64-windows-${{ hashFiles('CMakeLists.txt') }}
+
+      - name: Install OpenCV
+        if: steps.vcpkg-cache.outputs.cache-hit != 'true'
+        run: |
+          $env:VCPKG_DEFAULT_HOST_TRIPLET = "x64-windows"
+          & "C:\vcpkg\vcpkg.exe" install opencv:x64-windows
+
+      - name: Install NDI SDK
+        # The NDI installer is Inno Setup (no /S flag); use innoextract to unpack
+        # without a GUI, then point NDI_SDK_DIR at the extracted app/ directory.
+        shell: pwsh
+        run: |
+          $url = "${{ secrets.NDI_SDK_URL_WIN }}"
+          $installer = Join-Path $env:RUNNER_TEMP "ndi-sdk.exe"
+          curl.exe -L --retry 3 --retry-delay 5 $url -o $installer
+
+          choco install innoextract -y --no-progress
+          $extract = Join-Path $env:RUNNER_TEMP "ndi-sdk"
+          & innoextract $installer --output-dir $extract
+          if ($LASTEXITCODE -ne 0) { throw "innoextract failed with exit code $LASTEXITCODE" }
+
+          $appDir = Join-Path $extract "app"
+          if (-not (Test-Path $appDir)) {
+            Get-ChildItem $extract -Depth 3 | Select-Object FullName
+            throw "Expected app/ directory not found after extraction"
+          }
+          "NDI_SDK_DIR=$appDir" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Set up Bonjour SDK
+        # Installs Bonjour runtime, fetches dns_sd.h (Apache 2.0 from mDNSResponder),
+        # and generates dnssd.lib from the installed DLL via dumpbin + lib.exe.
+        shell: pwsh
+        run: |
+          choco install bonjour -y --no-progress
+
+          New-Item -ItemType Directory -Force "third_party\bonjour\Include"
+          New-Item -ItemType Directory -Force "third_party\bonjour\Lib\x64"
+
+          Invoke-WebRequest `
+            "https://raw.githubusercontent.com/apple-oss-distributions/mDNSResponder/main/mDNSShared/dns_sd.h" `
+            -OutFile "third_party\bonjour\Include\dns_sd.h"
+
+          $msvc = (Get-ChildItem "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC" |
+                   Sort-Object Name -Descending | Select-Object -First 1).FullName
+          $dumpbin = "$msvc\bin\Hostx64\x64\dumpbin.exe"
+          $lib     = "$msvc\bin\Hostx64\x64\lib.exe"
+
+          $exports = (& $dumpbin /exports "C:\Windows\System32\dnssd.dll") |
+            Where-Object { $_ -match '^\s+\d+\s+[0-9A-Fa-f]+\s+[0-9A-Fa-f]+\s+\w' } |
+            ForEach-Object { (($_ -split '\s+', 5)[4]).Trim() } |
+            Where-Object { $_ }
+
+          @("LIBRARY dnssd", "EXPORTS") + $exports |
+            Set-Content "third_party\bonjour\Lib\x64\dnssd.def" -Encoding ascii
+
+          & $lib /def:"third_party\bonjour\Lib\x64\dnssd.def" `
+                 /machine:x64 `
+                 /out:"third_party\bonjour\Lib\x64\dnssd.lib"
+
+      - name: Configure
+        run: |
+          cmake -S . -B build -A x64 `
+            -DCMAKE_BUILD_TYPE=Release `
+            "-DCMAKE_PREFIX_PATH=$env:QTDIR;C:\vcpkg\installed\x64-windows" `
+            -DCMAKE_TOOLCHAIN_FILE="C:\vcpkg\scripts\buildsystems\vcpkg.cmake"
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Deploy Qt runtime
+        run: |
+          & "$env:QTDIR\bin\windeployqt.exe" --release --compiler-runtime "build\Release\mouse-posi.exe"
+          Copy-Item "C:\Windows\System32\dnssd.dll" "build\Release\" -Force
+
+      - name: Create installer
+        run: |
+          $version = if ("${{ github.ref_name }}" -match '^v(.+)$') { $Matches[1] } else { "0.0.0" }
+          makensis /DVERSION="$version" packaging\windows.nsi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MousePosi-Windows
+          path: MousePosi-*-Setup.exe
+          if-no-files-found: error
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  release:
+    name: GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    needs: [build-macos, build-windows]
+    runs-on: ubuntu-latest
+    env:
+      TAG_NAME: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG_NAME }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            MousePosi.dmg
+            MousePosi-*-Setup.exe
