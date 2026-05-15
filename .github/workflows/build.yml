@@ -131,29 +131,15 @@ jobs:
           modules: "qtmultimedia"
           cache: true
 
-      - name: Cache OpenCV
+      - name: Cache vcpkg binary cache
         uses: actions/cache@v4
-        id: opencv-cache
         with:
-          path: C:\opencv
-          key: opencv-4.10.0-windows-x64
+          path: ~\AppData\Local\vcpkg\archives
+          key: vcpkg-opencv4-core-calib3d-imgproc-x64-windows-v1
 
-      - name: Install OpenCV
-        if: steps.opencv-cache.outputs.cache-hit != 'true'
+      - name: Install OpenCV via vcpkg
         shell: pwsh
-        run: |
-          Invoke-WebRequest `
-            "https://github.com/opencv/opencv/releases/download/4.10.0/opencv-4.10.0-windows.exe" `
-            -OutFile "$env:RUNNER_TEMP\opencv.exe"
-          & "$env:RUNNER_TEMP\opencv.exe" -o"C:\" -y
-          # The prebuilt package may not include debug DLLs; stub them so
-          # OpenCVModules.cmake file-existence checks pass in Release-only builds.
-          $bin = "C:\opencv\build\x64\vc16\bin"
-          $lib = "C:\opencv\build\x64\vc16\lib"
-          if (-not (Test-Path "$bin\opencv_world4100d.dll")) {
-            Copy-Item "$bin\opencv_world4100.dll" "$bin\opencv_world4100d.dll" -Force
-            Copy-Item "$lib\opencv_world4100.lib"  "$lib\opencv_world4100d.lib"  -Force
-          }
+        run: vcpkg install "opencv4[core,calib3d,imgproc]:x64-windows" --no-print-usage
 
       - name: Install NDI SDK
         # The NDI installer is Inno Setup (no /S flag); use innoextract to unpack
@@ -216,7 +202,8 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release `
             -DCMAKE_CONFIGURATION_TYPES=Release `
             "-DCMAKE_PREFIX_PATH=$env:QTDIR" `
-            "-DOpenCV_DIR=C:\opencv\build\x64\vc16\lib"
+            "-DCMAKE_TOOLCHAIN_FILE=C:\vcpkg\scripts\buildsystems\vcpkg.cmake" `
+            -DVCPKG_TARGET_TRIPLET=x64-windows
 
       - name: Build
         run: cmake --build build --config Release --parallel
@@ -225,7 +212,7 @@ jobs:
         run: |
           & "$env:QTDIR\bin\windeployqt.exe" --release --compiler-runtime "build\Release\mouse-posi.exe"
           Copy-Item "C:\Windows\System32\dnssd.dll" "build\Release\" -Force
-          Copy-Item "C:\opencv\build\x64\vc16\bin\opencv_world4100.dll" "build\Release\" -Force
+          Copy-Item "C:\vcpkg\installed\x64-windows\bin\opencv_*.dll" "build\Release\" -Force
 
       - name: Create installer
         run: |
