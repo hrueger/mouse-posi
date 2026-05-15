@@ -73,6 +73,7 @@ jobs:
         run: |
           codesign --force --options runtime --deep \
             --sign "$APPLE_SIGNING_IDENTITY" \
+            --entitlements src/macos/entitlements.plist \
             build/mouse-posi.app
 
       - name: Create DMG
