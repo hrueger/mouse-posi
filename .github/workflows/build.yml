@@ -208,7 +208,7 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release `
             -DCMAKE_CONFIGURATION_TYPES=Release `
             "-DCMAKE_PREFIX_PATH=$env:QTDIR" `
-            "-DOpenCV_DIR=C:\opencv\build"
+            "-DOpenCV_DIR=C:\opencv\build\x64\vc16\lib"
 
       - name: Build
         run: cmake --build build --config Release --parallel
