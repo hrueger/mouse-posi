@@ -107,13 +107,13 @@ jobs:
           ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref }}
 
       - name: Install Qt
-        uses: jurplel/install-qt-action@v3
+        uses: jurplel/install-qt-action@v4
         with:
           version: "6.8.3"
           host: windows
           target: desktop
           arch: win64_msvc2022_64
-          modules: "qtmultimedia qtsvg"
+          modules: "qtmultimedia"
           cache: true
 
       - name: Cache vcpkg OpenCV
