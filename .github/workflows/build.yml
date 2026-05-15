@@ -146,6 +146,14 @@ jobs:
             "https://github.com/opencv/opencv/releases/download/4.10.0/opencv-4.10.0-windows.exe" `
             -OutFile "$env:RUNNER_TEMP\opencv.exe"
           & "$env:RUNNER_TEMP\opencv.exe" -o"C:\" -y
+          # The prebuilt package may not include debug DLLs; stub them so
+          # OpenCVModules.cmake file-existence checks pass in Release-only builds.
+          $bin = "C:\opencv\build\x64\vc16\bin"
+          $lib = "C:\opencv\build\x64\vc16\lib"
+          if (-not (Test-Path "$bin\opencv_world4100d.dll")) {
+            Copy-Item "$bin\opencv_world4100.dll" "$bin\opencv_world4100d.dll" -Force
+            Copy-Item "$lib\opencv_world4100.lib"  "$lib\opencv_world4100d.lib"  -Force
+          }
 
       - name: Install NDI SDK
         # The NDI installer is Inno Setup (no /S flag); use innoextract to unpack
@@ -217,7 +225,7 @@ jobs:
         run: |
           & "$env:QTDIR\bin\windeployqt.exe" --release --compiler-runtime "build\Release\mouse-posi.exe"
           Copy-Item "C:\Windows\System32\dnssd.dll" "build\Release\" -Force
-          Copy-Item "C:\opencv\build\x64\vc16\bin\opencv_world410.dll" "build\Release\" -Force
+          Copy-Item "C:\opencv\build\x64\vc16\bin\opencv_world4100.dll" "build\Release\" -Force
 
       - name: Create installer
         run: |
