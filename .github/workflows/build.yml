@@ -131,8 +131,9 @@ jobs:
           modules: "qtmultimedia"
           cache: true
 
-      - name: Cache vcpkg binary cache
-        uses: actions/cache@v4
+      - name: Restore vcpkg binary cache
+        id: vcpkg-cache
+        uses: actions/cache/restore@v4
         with:
           path: ~\AppData\Local\vcpkg\archives
           key: vcpkg-opencv4-x64-windows-v2
@@ -140,6 +141,13 @@ jobs:
       - name: Install OpenCV via vcpkg
         shell: pwsh
         run: vcpkg install "opencv4:x64-windows" --no-print-usage
+
+      - name: Save vcpkg binary cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ~\AppData\Local\vcpkg\archives
+          key: vcpkg-opencv4-x64-windows-v2
 
       - name: Install NDI SDK
         # The NDI installer is Inno Setup (no /S flag); use innoextract to unpack
@@ -201,7 +209,7 @@ jobs:
           cmake -S . -B build -A x64 `
             -DCMAKE_BUILD_TYPE=Release `
             -DCMAKE_CONFIGURATION_TYPES=Release `
-            "-DCMAKE_PREFIX_PATH=$env:QTDIR" `
+            "-DCMAKE_PREFIX_PATH=$env:QT_ROOT_DIR" `
             "-DCMAKE_TOOLCHAIN_FILE=C:\vcpkg\scripts\buildsystems\vcpkg.cmake" `
             -DVCPKG_TARGET_TRIPLET=x64-windows
 
@@ -210,7 +218,7 @@ jobs:
 
       - name: Deploy Qt runtime
         run: |
-          & "$env:QTDIR\bin\windeployqt.exe" --release --compiler-runtime "build\Release\mouse-posi.exe"
+          & "$env:QT_ROOT_DIR\bin\windeployqt.exe" --release --compiler-runtime "build\Release\mouse-posi.exe"
           Copy-Item "C:\Windows\System32\dnssd.dll" "build\Release\" -Force
           Copy-Item "C:\vcpkg\installed\x64-windows\bin\opencv_*.dll" "build\Release\" -Force
 
