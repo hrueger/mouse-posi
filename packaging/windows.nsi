@@ -1,6 +1,9 @@
 ; Mouse Posi — Windows Installer
 ; Run: makensis /DVERSION=x.y.z packaging\windows.nsi  (from repo root)
 
+; Anchor all relative paths to the repo root regardless of how makensis is invoked.
+!cd "${__FILEDIR__}\.."
+
 !ifndef VERSION
   !define VERSION "0.0.0"
 !endif
