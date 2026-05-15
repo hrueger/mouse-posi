@@ -121,7 +121,7 @@ void DnsSdBridge::advertise(const QString& sessionName, quint16 port) {
         &impl->advertiseRef,
         0, 0,
         nameUtf8.constData(),
-        "_mouseposi._tcp.",
+        "_onpoint._tcp.",
         nullptr, nullptr,
         htons(port),
         0, nullptr,
@@ -160,7 +160,7 @@ void DnsSdBridge::browse() {
     DNSServiceErrorType err = DNSServiceBrowse(
         &impl->browseRef,
         0, 0,
-        "_mouseposi._tcp.",
+        "_onpoint._tcp.",
         nullptr,
         DnsSdWinImpl::onBrowseReply,
         impl);

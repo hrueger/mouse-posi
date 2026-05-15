@@ -1,4 +1,4 @@
-; Mouse Posi — Windows Installer
+; OnPoint — Windows Installer
 ; Run: makensis /DVERSION=x.y.z packaging\windows.nsi  (from repo root)
 
 ; Anchor all relative paths to the repo root (script lives in packaging\, build output is in repo root).
@@ -8,15 +8,15 @@
   !define VERSION "0.0.0"
 !endif
 
-!define APPNAME    "Mouse Posi"
-!define APPEXE     "mouse-posi.exe"
+!define APPNAME    "OnPoint"
+!define APPEXE     "onpoint.exe"
 !define PUBLISHER  "Hannes Rüger"
-!define REGKEY     "Software\Microsoft\Windows\CurrentVersion\Uninstall\MousePosi"
+!define REGKEY     "Software\Microsoft\Windows\CurrentVersion\Uninstall\OnPoint"
 
 Name             "${APPNAME} ${VERSION}"
-OutFile          "MousePosi-${VERSION}-Setup.exe"
-InstallDir       "$PROGRAMFILES64\MousePosi"
-InstallDirRegKey HKLM "Software\MousePosi" "InstallDir"
+OutFile          "OnPoint-${VERSION}-Setup.exe"
+InstallDir       "$PROGRAMFILES64\OnPoint"
+InstallDirRegKey HKLM "Software\OnPoint" "InstallDir"
 RequestExecutionLevel admin
 SetCompressor /SOLID lzma
 Unicode true
@@ -24,6 +24,8 @@ Unicode true
 !include "MUI2.nsh"
 
 !define MUI_ABORTWARNING
+!define MUI_ICON   "src\assets\onpoint.ico"
+!define MUI_UNICON "src\assets\onpoint.ico"
 
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_DIRECTORY
@@ -38,13 +40,13 @@ Unicode true
 !insertmacro MUI_LANGUAGE "English"
 
 ;───────────────────────────────────────────────────────────────────────────────
-Section "Mouse Posi" SecMain
+Section "OnPoint" SecMain
   SectionIn RO
 
   SetOutPath "$INSTDIR"
   File /r "build\Release\*"
 
-  WriteRegStr   HKLM "Software\MousePosi" "InstallDir"     "$INSTDIR"
+  WriteRegStr   HKLM "Software\OnPoint" "InstallDir"     "$INSTDIR"
   WriteRegStr   HKLM "${REGKEY}" "DisplayName"             "${APPNAME}"
   WriteRegStr   HKLM "${REGKEY}" "DisplayVersion"          "${VERSION}"
   WriteRegStr   HKLM "${REGKEY}" "Publisher"               "${PUBLISHER}"
@@ -56,9 +58,9 @@ Section "Mouse Posi" SecMain
   WriteUninstaller "$INSTDIR\Uninstall.exe"
 
   CreateDirectory "$SMPROGRAMS\${APPNAME}"
-  CreateShortcut  "$SMPROGRAMS\${APPNAME}\${APPNAME}.lnk" "$INSTDIR\${APPEXE}"
+  CreateShortcut  "$SMPROGRAMS\${APPNAME}\${APPNAME}.lnk" "$INSTDIR\${APPEXE}" "" "$INSTDIR\${APPEXE}" 0
   CreateShortcut  "$SMPROGRAMS\${APPNAME}\Uninstall.lnk"  "$INSTDIR\Uninstall.exe"
-  CreateShortcut  "$DESKTOP\${APPNAME}.lnk" "$INSTDIR\${APPEXE}"
+  CreateShortcut  "$DESKTOP\${APPNAME}.lnk" "$INSTDIR\${APPEXE}" "" "$INSTDIR\${APPEXE}" 0
 SectionEnd
 
 ;───────────────────────────────────────────────────────────────────────────────
@@ -67,5 +69,5 @@ Section "Uninstall"
   Delete "$DESKTOP\${APPNAME}.lnk"
   RMDir  /r "$SMPROGRAMS\${APPNAME}"
   DeleteRegKey HKLM "${REGKEY}"
-  DeleteRegKey HKLM "Software\MousePosi"
+  DeleteRegKey HKLM "Software\OnPoint"
 SectionEnd

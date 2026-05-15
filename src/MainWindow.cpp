@@ -47,7 +47,7 @@ static constexpr bool kEnableIncomingPsn = true;
 }
 
 MainWindow::MainWindow(NdiReceiver* ndi, QWidget* parent) : QMainWindow(parent) {
-    setWindowTitle("mouse-posi");
+    setWindowTitle("OnPoint");
     resize(1440, 810);
 
     // ── Central layout: tracker bar + (video + sidebar) ──────────────────
@@ -306,8 +306,8 @@ MainWindow::MainWindow(NdiReceiver* ndi, QWidget* parent) : QMainWindow(parent) 
         statusBar()->showMessage("Session: " + msg, 5000);
     });
 
-    // Debug log file — ~/mouse-posi-debug.log
-    logFile_.setFileName(QDir::homePath() + "/mouse-posi-debug.log");
+    // Debug log file — ~/onpoint-debug.log
+    logFile_.setFileName(QDir::homePath() + "/onpoint-debug.log");
     if (logFile_.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text)) {
         logStream_ = new QTextStream(&logFile_);
         log("=== session started ===");
@@ -386,11 +386,11 @@ MainWindow::MainWindow(NdiReceiver* ndi, QWidget* parent) : QMainWindow(parent) 
     });
 
     auto* helpMenu  = menuBar()->addMenu("&Help");
-    auto* actAbout  = helpMenu->addAction("About mouse-posi...");
+    auto* actAbout  = helpMenu->addAction("About OnPoint...");
     actAbout->setMenuRole(QAction::AboutRole);
     connect(actAbout, &QAction::triggered, this, [this]() {
         oclero::qlementine::AboutDialog dlg(this);
-        dlg.setApplicationName("mouse-posi");
+        dlg.setApplicationName("OnPoint");
         dlg.setApplicationVersion("1.0");
         dlg.setDescription("Camera-based mouse follow spot position tracker and PSN sender.");
         dlg.setCopyright("© 2026 Hannes Rüger");
@@ -583,7 +583,7 @@ void MainWindow::applyProject() {
 }
 
 void MainWindow::updateWindowTitle() {
-    const QString base = QStringLiteral("mouse-posi");
+    const QString base = QStringLiteral("OnPoint");
     if (projectPath_.isEmpty()) {
         setWindowTitle(QString("%1 — Untitled").arg(base));
         return;
@@ -755,7 +755,7 @@ void MainWindow::onOpenProject() {
     opts |= QFileDialog::DontUseNativeDialog;
 #endif
     QString path = QFileDialog::getOpenFileName(
-        this, "Open Project", QDir::homePath(), "mouse-posi Projects (*.mposi)", nullptr, opts);
+        this, "Open Project", QDir::homePath(), "OnPoint Projects (*.onpoint)", nullptr, opts);
     if (path.isEmpty()) return;
     try {
         Project p = Project::load(path);
@@ -782,11 +782,11 @@ void MainWindow::onSaveProjectAs() {
     opts |= QFileDialog::DontUseNativeDialog;
 #endif
     QString defaultName = projectPath_.isEmpty()
-        ? QDir::homePath() + "/Untitled.mposi"
+        ? QDir::homePath() + "/Untitled.onpoint"
         : projectPath_;
     QString path = QFileDialog::getSaveFileName(
         this, "Save Project", defaultName,
-        "mouse-posi Projects (*.mposi)", nullptr, opts);
+        "OnPoint Projects (*.onpoint)", nullptr, opts);
     if (path.isEmpty()) return;
     projectPath_ = path;
     project_.save(path);
@@ -795,7 +795,7 @@ void MainWindow::onSaveProjectAs() {
 }
 
 void MainWindow::saveRecent(const QString& path) {
-    QSettings s("mouse-posi", "mouse-posi");
+    QSettings s("onpoint", "onpoint");
     QStringList recent = s.value("recentProjects").toStringList();
     recent.removeAll(path);
     recent.prepend(path);
@@ -804,6 +804,6 @@ void MainWindow::saveRecent(const QString& path) {
 }
 
 QStringList MainWindow::recentProjects() const {
-    QSettings s("mouse-posi", "mouse-posi");
+    QSettings s("onpoint", "onpoint");
     return s.value("recentProjects").toStringList();
 }

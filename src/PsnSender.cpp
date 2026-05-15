@@ -119,8 +119,8 @@ PsnSender::PsnSender(QObject* parent) : QObject(parent) {
     timer_.start();
     // System name is shown by receivers (e.g. consoles) as the sender identity.
     const QString host = QHostInfo::localHostName();
-    systemName_ = host.isEmpty() ? QStringLiteral("mouse-posi")
-                                 : QStringLiteral("mouse-posi-%1").arg(host);
+    systemName_ = host.isEmpty() ? QStringLiteral("onpoint")
+                                 : QStringLiteral("onpoint-%1").arg(host);
 }
 
 void PsnSender::configure(const NetworkConfig& cfg) {

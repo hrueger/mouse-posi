@@ -98,7 +98,7 @@ void DnsSdBridge::advertise(const QString& sessionName, quint16 port) {
     stopAdvertising();
     NSString* name = sessionName.toNSString();
     impl.service = [[NSNetService alloc] initWithDomain:@""
-                                                   type:@"_mouseposi._tcp."
+                                                   type:@"_onpoint._tcp."
                                                    name:name
                                                    port:(int)port];
     impl.service.delegate = impl;
@@ -117,7 +117,7 @@ void DnsSdBridge::browse() {
     impl.browser = [[NSNetServiceBrowser alloc] init];
     impl.browser.delegate = impl;
     [impl.browser scheduleInRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
-    [impl.browser searchForServicesOfType:@"_mouseposi._tcp." inDomain:@""];
+    [impl.browser searchForServicesOfType:@"_onpoint._tcp." inDomain:@""];
 }
 
 void DnsSdBridge::stopBrowsing() {

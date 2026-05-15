@@ -36,7 +36,7 @@ SessionPanel::SessionPanel(SessionManager* mgr, QWidget* parent)
     sessionNameEdit_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
     peerNameEdit_    = new QLineEdit;
     peerNameEdit_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
-    QSettings s("mouse-posi", "mouse-posi");
+    QSettings s("onpoint", "onpoint");
     peerNameEdit_->setText(s.value("peerName", "Station 1").toString());
     hostFL->addRow("Session:", sessionNameEdit_);
     hostFL->addRow("My name:", peerNameEdit_);
@@ -89,7 +89,7 @@ SessionPanel::SessionPanel(SessionManager* mgr, QWidget* parent)
         QString peer = peerNameEdit_->text().trimmed();
         if (name.isEmpty()) name = "My Session";
         if (peer.isEmpty()) peer = "Station 1";
-        QSettings s("mouse-posi", "mouse-posi");
+        QSettings s("onpoint", "onpoint");
         s.setValue("peerName", peer);
         mgr_->startHosting(name, peer);
     });
@@ -102,7 +102,7 @@ SessionPanel::SessionPanel(SessionManager* mgr, QWidget* parent)
         auto disc = item->data(Qt::UserRole).value<DiscoveredSession>();
         QString peer = peerNameEdit_->text().trimmed();
         if (peer.isEmpty()) peer = "Station 1";
-        QSettings s("mouse-posi", "mouse-posi");
+        QSettings s("onpoint", "onpoint");
         s.setValue("peerName", peer);
         mgr_->joinSession(disc.host, disc.port, peer);
     });

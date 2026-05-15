@@ -90,7 +90,7 @@ void NdiReceiver::run() {
         desc.color_format       = NDIlib_recv_color_format_BGRX_BGRA;
         desc.bandwidth          = NDIlib_recv_bandwidth_highest;
         desc.allow_video_fields = false;
-        desc.p_ndi_recv_name    = "mouse-posi";
+        desc.p_ndi_recv_name    = "onpoint";
 
         NDIlib_recv_instance_t recv = NDIlib_recv_create_v3(&desc);
         if (!recv) { msleep(500); continue; }

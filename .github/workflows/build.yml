@@ -63,7 +63,7 @@ jobs:
 
       - name: Bundle
         run: |
-          "$(brew --prefix qt)/bin/macdeployqt" build/mouse-posi.app
+          "$(brew --prefix qt)/bin/macdeployqt" build/onpoint.app
 
       - name: Sign
         # Skipped if APPLE_SIGNING_IDENTITY secret is not set.
@@ -74,21 +74,24 @@ jobs:
           codesign --force --options runtime --deep \
             --sign "$APPLE_SIGNING_IDENTITY" \
             --entitlements src/macos/entitlements.plist \
-            build/mouse-posi.app
+            build/onpoint.app
 
       - name: Create DMG
         run: |
+          mkdir -p dmg_staging
+          cp -R build/onpoint.app dmg_staging/
+          ln -s /Applications dmg_staging/Applications
           hdiutil create \
-            -volname "Mouse Posi" \
-            -srcfolder build/mouse-posi.app \
+            -volname "OnPoint" \
+            -srcfolder dmg_staging \
             -ov -format UDZO \
-            MousePosi.dmg
+            OnPoint.dmg
 
       - name: Sign DMG
         if: ${{ env.APPLE_SIGNING_IDENTITY != '' }}
         env:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-        run: codesign --sign "$APPLE_SIGNING_IDENTITY" MousePosi.dmg
+        run: codesign --sign "$APPLE_SIGNING_IDENTITY" OnPoint.dmg
 
       - name: Notarize DMG
         if: ${{ env.APPLE_ID != '' }}
@@ -97,18 +100,18 @@ jobs:
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          xcrun notarytool submit MousePosi.dmg \
+          xcrun notarytool submit OnPoint.dmg \
             --apple-id "$APPLE_ID" \
             --password "$APPLE_APP_PASSWORD" \
             --team-id "$APPLE_TEAM_ID" \
             --wait
-          xcrun stapler staple MousePosi.dmg
+          xcrun stapler staple OnPoint.dmg
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: MousePosi-macOS
-          path: MousePosi.dmg
+          name: OnPoint-macOS
+          path: OnPoint.dmg
           if-no-files-found: error
 
   # ─────────────────────────────────────────────────────────────────────────────
@@ -218,7 +221,7 @@ jobs:
 
       - name: Deploy Qt runtime
         run: |
-          & "$env:QT_ROOT_DIR\bin\windeployqt.exe" --release --compiler-runtime "build\Release\mouse-posi.exe"
+          & "$env:QT_ROOT_DIR\bin\windeployqt.exe" --release --compiler-runtime "build\Release\onpoint.exe"
           Copy-Item "C:\Windows\System32\dnssd.dll" "build\Release\" -Force
           Copy-Item "C:\vcpkg\installed\x64-windows\bin\opencv_*.dll" "build\Release\" -Force
 
@@ -230,8 +233,8 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: MousePosi-Windows
-          path: MousePosi-*-Setup.exe
+          name: OnPoint-Windows
+          path: OnPoint-*-Setup.exe
           if-no-files-found: error
 
   # ─────────────────────────────────────────────────────────────────────────────
@@ -254,5 +257,5 @@ jobs:
           generate_release_notes: true
           fail_on_unmatched_files: true
           files: |
-            MousePosi.dmg
-            MousePosi-*-Setup.exe
+            OnPoint.dmg
+            OnPoint-*-Setup.exe

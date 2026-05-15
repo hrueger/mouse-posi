@@ -2,6 +2,7 @@
 #ifdef Q_OS_WIN
 #  include <objbase.h>
 #endif
+#include <QIcon>
 #include <QStyleHints>
 #ifdef HAVE_QT_DARWIN_CAMERA_PERMISSION_PLUGIN
 #  include <QtPlugin>
@@ -20,8 +21,11 @@ int main(int argc, char* argv[]) {
     CoInitializeEx(nullptr, COINIT_MULTITHREADED);
 #endif
     QApplication app(argc, argv);
-    app.setApplicationName("mouse-posi");
-    app.setOrganizationName("mouse-posi");
+    app.setApplicationName("onpoint");
+    app.setOrganizationName("onpoint");
+#ifndef Q_OS_MACOS
+    app.setWindowIcon(QIcon(":/assets/logo.png"));
+#endif
 
     auto* style = new oclero::qlementine::QlementineStyle;
     QApplication::setStyle(style);

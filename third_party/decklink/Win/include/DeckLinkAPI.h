@@ -6,7 +6,7 @@
  /* File created by MIDL compiler version 8.01.0628 */
 /* at Tue Jan 19 04:14:07 2038
  */
-/* Compiler settings for Z:\source\ai_experiments\mouse-posi\third_party\decklink\Win\include\DeckLinkAPI.idl:
+/* Compiler settings for Z:\source\ai_experiments\onpoint\third_party\decklink\Win\include\DeckLinkAPI.idl:
     Oicf, W1, Zp8, env=Win64 (32b run), target_arch=AMD64 8.01.0628 
     protocol : dce , ms_ext, c_ext, robust
     error checks: allocation ref bounds_check enum stub_data 

@@ -3,4 +3,8 @@
         <file alias="dark.json">themes/dark.json</file>
         <file alias="light.json">themes/light.json</file>
     </qresource>
+    <qresource prefix="/assets">
+        <file alias="logo.png">assets/logo.png</file>
+        <file alias="logo_with_text.png">assets/logo_with_text.png</file>
+    </qresource>
 </RCC>

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.25)
-project(mouse-posi VERSION 1.0 LANGUAGES CXX)
+project(onpoint VERSION 1.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -87,7 +87,16 @@ set(HEADERS
     src/SessionManager.h
 )
 
-add_executable(mouse-posi ${SOURCES} ${HEADERS})
+if(APPLE)
+    list(APPEND SOURCES src/assets/onpoint.icns)
+    set_source_files_properties(src/assets/onpoint.icns
+        PROPERTIES MACOSX_PACKAGE_LOCATION "Resources")
+endif()
+if(WIN32)
+    list(APPEND SOURCES src/onpoint.rc)
+endif()
+
+add_executable(onpoint ${SOURCES} ${HEADERS})
 
 # ── NDI SDK discovery ─────────────────────────────────────────────────────────
 # Search order: project-local ndi/, then platform SDK locations.
@@ -147,12 +156,12 @@ if(NOT NDI_FOUND AND APPLE AND EXISTS "/usr/local/lib/libndi.dylib")
     endif()
 endif()
 
-target_include_directories(mouse-posi PRIVATE
+target_include_directories(onpoint PRIVATE
     src
     ${OpenCV_INCLUDE_DIRS}
 )
 
-target_link_libraries(mouse-posi PRIVATE
+target_link_libraries(onpoint PRIVATE
     Qt6::Core
     Qt6::Gui
     Qt6::Widgets
@@ -163,24 +172,24 @@ target_link_libraries(mouse-posi PRIVATE
     qlementine
 )
 
-target_compile_definitions(mouse-posi PRIVATE WEBCAM_AVAILABLE=1)
+target_compile_definitions(onpoint PRIVATE WEBCAM_AVAILABLE=1)
 
 if(NDI_FOUND)
-    target_include_directories(mouse-posi PRIVATE "${NDI_INCLUDE_DIR}")
-    target_link_libraries(mouse-posi PRIVATE "${NDI_LIB}")
-    target_compile_definitions(mouse-posi PRIVATE NDI_AVAILABLE=1)
+    target_include_directories(onpoint PRIVATE "${NDI_INCLUDE_DIR}")
+    target_link_libraries(onpoint PRIVATE "${NDI_LIB}")
+    target_compile_definitions(onpoint PRIVATE NDI_AVAILABLE=1)
     if(APPLE)
         # Copy dylib into the .app bundle so it's self-contained
-        add_custom_command(TARGET mouse-posi POST_BUILD
+        add_custom_command(TARGET onpoint POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 "${NDI_LIB}"
-                "$<TARGET_FILE_DIR:mouse-posi>/libndi.dylib")
+                "$<TARGET_FILE_DIR:onpoint>/libndi.dylib")
     elseif(WIN32 AND DEFINED NDI_DLL AND EXISTS "${NDI_DLL}")
         # Copy runtime DLL next to the executable
-        add_custom_command(TARGET mouse-posi POST_BUILD
+        add_custom_command(TARGET onpoint POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 "${NDI_DLL}"
-                "$<TARGET_FILE_DIR:mouse-posi>/")
+                "$<TARGET_FILE_DIR:onpoint>/")
     endif()
 else()
     if(WIN32)
@@ -211,10 +220,10 @@ if(APPLE)
         PATHS "${_qt6_cmake_parent}/Qt6Core"
         NO_DEFAULT_PATH)
     if(TARGET Qt6::QDarwinCameraPermissionPlugin)
-        set_target_properties(mouse-posi PROPERTIES
+        set_target_properties(onpoint PROPERTIES
             _qt_has_QDarwinCameraPermissionPlugin_usage_description TRUE)
-        target_link_libraries(mouse-posi PRIVATE Qt6::QDarwinCameraPermissionPlugin)
-        target_compile_definitions(mouse-posi PRIVATE HAVE_QT_DARWIN_CAMERA_PERMISSION_PLUGIN=1)
+        target_link_libraries(onpoint PRIVATE Qt6::QDarwinCameraPermissionPlugin)
+        target_compile_definitions(onpoint PRIVATE HAVE_QT_DARWIN_CAMERA_PERMISSION_PLUGIN=1)
         message(STATUS "Found Qt Darwin camera permission plugin")
     else()
         message(WARNING
@@ -222,17 +231,18 @@ if(APPLE)
             "— webcam permission prompt may not work")
     endif()
 
-    set_target_properties(mouse-posi PROPERTIES
+    set_target_properties(onpoint PROPERTIES
         MACOSX_BUNDLE TRUE
-        MACOSX_BUNDLE_BUNDLE_NAME "Mouse Posi"
+        MACOSX_BUNDLE_BUNDLE_NAME "OnPoint"
         MACOSX_BUNDLE_INFO_PLIST "${CMAKE_SOURCE_DIR}/src/macos/Info.plist.in"
-        MACOSX_BUNDLE_GUI_IDENTIFIER "com.hrueger.mouse-posi"
+        MACOSX_BUNDLE_GUI_IDENTIFIER "com.hrueger.onpoint"
+        MACOSX_BUNDLE_ICON_FILE "onpoint"
         MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}"
         MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}"
         MACOSX_BUNDLE_LONG_VERSION_STRING "${PROJECT_VERSION}"
     )
 
-    target_sources(mouse-posi PRIVATE src/DnsSdBridge.mm)
+    target_sources(onpoint PRIVATE src/DnsSdBridge.mm)
     set_source_files_properties(src/DnsSdBridge.mm
         PROPERTIES COMPILE_FLAGS "-x objective-c++")
 
@@ -240,7 +250,7 @@ if(APPLE)
     find_library(AVFOUNDATION  AVFoundation  REQUIRED)
     find_library(COREMEDIA     CoreMedia     REQUIRED)
     find_library(COREFOUNDATION CoreFoundation REQUIRED)
-    target_link_libraries(mouse-posi PRIVATE
+    target_link_libraries(onpoint PRIVATE
         ${FOUNDATION} ${AVFOUNDATION} ${COREMEDIA} ${COREFOUNDATION})
 
     # DeckLink SDK (macOS): headers bundled in third_party/decklink/include/
@@ -252,17 +262,17 @@ if(APPLE)
             "https://www.blackmagicdesign.com/developer/product/capture-and-playback "
             "and place the Mac/include/ contents there.")
     endif()
-    target_include_directories(mouse-posi PRIVATE "${_decklink_macos_inc}")
-    target_sources(mouse-posi PRIVATE "${_decklink_macos_inc}/DeckLinkAPIDispatch.cpp")
-    target_compile_definitions(mouse-posi PRIVATE DECKLINK_AVAILABLE=1)
+    target_include_directories(onpoint PRIVATE "${_decklink_macos_inc}")
+    target_sources(onpoint PRIVATE "${_decklink_macos_inc}/DeckLinkAPIDispatch.cpp")
+    target_compile_definitions(onpoint PRIVATE DECKLINK_AVAILABLE=1)
 endif()
 
 # ── Windows-specific ──────────────────────────────────────────────────────────
 if(WIN32)
     # Use the Windows GUI subsystem (no console window)
-    set_target_properties(mouse-posi PROPERTIES WIN32_EXECUTABLE TRUE)
+    set_target_properties(onpoint PROPERTIES WIN32_EXECUTABLE TRUE)
 
-    target_link_libraries(mouse-posi PRIVATE ws2_32)
+    target_link_libraries(onpoint PRIVATE ws2_32)
 
     # DNS-SD (mDNS) for session discovery via Apple Bonjour for Windows.
     # Download the Bonjour SDK from https://developer.apple.com/bonjour/ or
@@ -289,10 +299,10 @@ if(WIN32)
             "https://developer.apple.com/download/all/?q=Bonjour+SDK+for+Windows "
             "and install it, or set BONJOUR_SDK_HOME to its root directory.")
     endif()
-    target_sources(mouse-posi PRIVATE src/DnsSdBridge_win.cpp)
-    target_include_directories(mouse-posi PRIVATE "${BONJOUR_INCLUDE_DIR}")
-    target_link_libraries(mouse-posi PRIVATE "${BONJOUR_LIB}")
-    target_compile_definitions(mouse-posi PRIVATE DNSSD_AVAILABLE=1)
+    target_sources(onpoint PRIVATE src/DnsSdBridge_win.cpp)
+    target_include_directories(onpoint PRIVATE "${BONJOUR_INCLUDE_DIR}")
+    target_link_libraries(onpoint PRIVATE "${BONJOUR_LIB}")
+    target_compile_definitions(onpoint PRIVATE DNSSD_AVAILABLE=1)
     message(STATUS "Found Apple Bonjour SDK — session discovery enabled")
 
     # DeckLink SDK (Windows): pre-generated headers in third_party/decklink/Win/include/
@@ -306,10 +316,10 @@ if(WIN32)
             "Place the Win/include/ contents there, then run midl.exe on DeckLinkAPI.idl "
             "to generate DeckLinkAPI.h and DeckLinkAPI_i.c.")
     endif()
-    target_include_directories(mouse-posi PRIVATE "${_decklink_win_inc}")
+    target_include_directories(onpoint PRIVATE "${_decklink_win_inc}")
     # DeckLinkAPI_i.c provides COM CLSIDs/IIDs; compile as C
-    target_sources(mouse-posi PRIVATE "${_decklink_win_inc}/DeckLinkAPI_i.c")
+    target_sources(onpoint PRIVATE "${_decklink_win_inc}/DeckLinkAPI_i.c")
     set_source_files_properties("${_decklink_win_inc}/DeckLinkAPI_i.c" PROPERTIES LANGUAGE C)
-    target_compile_definitions(mouse-posi PRIVATE DECKLINK_AVAILABLE=1)
-    target_link_libraries(mouse-posi PRIVATE Ole32 OleAut32)
+    target_compile_definitions(onpoint PRIVATE DECKLINK_AVAILABLE=1)
+    target_link_libraries(onpoint PRIVATE Ole32 OleAut32)
 endif()
