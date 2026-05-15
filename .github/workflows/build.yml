@@ -181,7 +181,10 @@ jobs:
             "https://raw.githubusercontent.com/apple-oss-distributions/mDNSResponder/main/mDNSShared/dns_sd.h" `
             -OutFile "third_party\bonjour\Include\dns_sd.h"
 
-          $msvc = (Get-ChildItem "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC" |
+          $vsPath = & "C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe" `
+            -latest -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+            -property installationPath
+          $msvc = (Get-ChildItem "$vsPath\VC\Tools\MSVC" |
                    Sort-Object Name -Descending | Select-Object -First 1).FullName
           $dumpbin = "$msvc\bin\Hostx64\x64\dumpbin.exe"
           $lib     = "$msvc\bin\Hostx64\x64\lib.exe"
