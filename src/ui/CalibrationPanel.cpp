@@ -12,6 +12,7 @@
 #include <QPushButton>
 #include <QDoubleSpinBox>
 #include <QCheckBox>
+#include <QSlider>
 #include <QFrame>
 #include <limits>
 #include <cmath>
@@ -30,16 +31,18 @@ CalibrationPanel::CalibrationPanel(VideoWidget* video, NdiReceiver* ndi,
     calibrateBtn_->setToolTip("Toggle calibration placement mode on the video");
     layout->addWidget(calibrateBtn_);
 
-    // Mode selector
+    // Mode selector — 3D Rectangle is the default (index 0)
     auto* modeRow = new QHBoxLayout;
     modeRow->addWidget(new QLabel("Mode:"));
     schemeCombo_ = new QComboBox;
+    schemeCombo_->addItem("3D Rectangle");
     schemeCombo_->addItem("Rectangle");
     schemeCombo_->addItem("Manual");
     modeRow->addWidget(schemeCombo_, 1);
     layout->addLayout(modeRow);
 
     schemeStack_ = new QStackedWidget;
+    schemeStack_->addWidget(buildRect3DPage());
     schemeStack_->addWidget(buildRectPage());
     schemeStack_->addWidget(buildManualPage());
     layout->addWidget(schemeStack_);
@@ -63,6 +66,81 @@ CalibrationPanel::CalibrationPanel(VideoWidget* video, NdiReceiver* ndi,
 
     auto* resetBtn = new QPushButton("Reset Calibration");
     layout->addWidget(resetBtn);
+
+    // ── Height section ────────────────────────────────────────────────────
+    auto* heightSep = new QFrame;
+    heightSep->setFrameShape(QFrame::HLine);
+    heightSep->setFrameShadow(QFrame::Sunken);
+    layout->addWidget(heightSep);
+
+    // Helper: add a label + slider/spinbox row to any layout.
+    auto mkHeightRow = [&](QBoxLayout* tl, const QString& labelText,
+                           QSlider*& slider, QDoubleSpinBox*& spin) {
+        tl->addWidget(new QLabel(labelText));
+        auto* row = new QHBoxLayout;
+        slider = new QSlider(Qt::Horizontal);
+        slider->setRange(0, 2000);
+        slider->setValue(0);
+        spin = new QDoubleSpinBox;
+        spin->setRange(0.0, 20.0);
+        spin->setDecimals(2);
+        spin->setSingleStep(0.1);
+        spin->setSuffix(" m");
+        spin->setFixedWidth(72);
+        row->addWidget(slider, 1);
+        row->addWidget(spin);
+        tl->addLayout(row);
+    };
+
+    // Controls that require a 3D calibration — disabled until one exists.
+    has3DControls_ = new QWidget;
+    auto* h3l = new QVBoxLayout(has3DControls_);
+    h3l->setContentsMargins(0, 0, 0, 0);
+    h3l->setSpacing(6);
+
+    floorGridCheck_ = new QCheckBox("Show floor grid (1×1 m)");
+    h3l->addWidget(floorGridCheck_);
+
+    mkHeightRow(h3l, "Click plane height:", clickPlaneSlider_, clickPlaneSpin_);
+
+    showClickPlaneCheck_ = new QCheckBox("Show click plane");
+    h3l->addWidget(showClickPlaneCheck_);
+
+    has3DControls_->setEnabled(false);
+    layout->addWidget(has3DControls_);
+
+    // PSN output height is independent of calibration type.
+    mkHeightRow(layout, "PSN output height:", psnHeightSlider_, psnHeightSpin_);
+
+    // Slider ↔ spinbox bidirectional sync; emit the signal from whichever side changed.
+    connect(clickPlaneSlider_, &QSlider::valueChanged, this, [this](int v) {
+        QSignalBlocker b(clickPlaneSpin_);
+        clickPlaneSpin_->setValue(v / 100.0);
+        emit clickPlaneHeightChanged(float(v / 100.0));
+    });
+    connect(clickPlaneSpin_, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+            this, [this](double v) {
+        QSignalBlocker b(clickPlaneSlider_);
+        clickPlaneSlider_->setValue(qRound(v * 100.0));
+        emit clickPlaneHeightChanged(float(v));
+    });
+
+    connect(psnHeightSlider_, &QSlider::valueChanged, this, [this](int v) {
+        QSignalBlocker b(psnHeightSpin_);
+        psnHeightSpin_->setValue(v / 100.0);
+        emit psnOutputHeightChanged(float(v / 100.0));
+    });
+    connect(psnHeightSpin_, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+            this, [this](double v) {
+        QSignalBlocker b(psnHeightSlider_);
+        psnHeightSlider_->setValue(qRound(v * 100.0));
+        emit psnOutputHeightChanged(float(v));
+    });
+
+    connect(floorGridCheck_, &QCheckBox::toggled,
+            this, &CalibrationPanel::showFloorGridChanged);
+    connect(showClickPlaneCheck_, &QCheckBox::toggled,
+            this, &CalibrationPanel::showClickPlaneChanged);
 
     buildPointOverlay();
 
@@ -111,9 +189,10 @@ void CalibrationPanel::connectVideoSignals() {
     videoConnections_ << connect(video_, &VideoWidget::calibPointClicked,
                                   this, [this](QPointF pt) {
         switch (placing_) {
-        case Placing::RectCorner:   rectOnCornerPlaced(pt);   break;
-        case Placing::ManualOrigin: manualOnOriginPlaced(pt); break;
-        case Placing::ManualPoint:  manualOnPointPlaced(pt);  break;
+        case Placing::RectCorner:    rectOnCornerPlaced(pt);    break;
+        case Placing::Rect3DCorner:  rect3DOnCornerPlaced(pt);  break;
+        case Placing::ManualOrigin:  manualOnOriginPlaced(pt);  break;
+        case Placing::ManualPoint:   manualOnPointPlaced(pt);   break;
         default: break;
         }
     });
@@ -124,6 +203,12 @@ void CalibrationPanel::connectVideoSignals() {
             if (ci < rectCorners_.size()) {
                 rectCorners_[ci] = imagePos;
                 updateRectOverlay();
+            }
+        } else if (scheme_ == Scheme::Rect3D) {
+            int ci = (index == -1) ? 0 : (index + 1);
+            if (ci < rect3DCorners_.size()) {
+                rect3DCorners_[ci] = imagePos;
+                updateRect3DOverlay();
             }
         } else {
             if (index == -1 && hasOrigin_) {
@@ -140,6 +225,9 @@ void CalibrationPanel::connectVideoSignals() {
         if (scheme_ == Scheme::Rectangle) {
             updateRectOverlay();
             Q_UNUSED(index);
+        } else if (scheme_ == Scheme::Rect3D) {
+            updateRect3DOverlay();
+            Q_UNUSED(index); Q_UNUSED(widgetPos);
         } else {
             updateManualList();
             showPointOverlay(index, widgetPos);
@@ -164,6 +252,8 @@ void CalibrationPanel::onCalibrateToggled(bool on) {
         connectVideoSignals();
         if (scheme_ == Scheme::Rectangle)
             updateRectOverlay();
+        else if (scheme_ == Scheme::Rect3D)
+            updateRect3DOverlay();
         else
             updateManualOverlay();
     } else {
@@ -180,6 +270,47 @@ void CalibrationPanel::onCalibrateToggled(bool on) {
 
 void CalibrationPanel::setCalibration(const CalibrationData& cal) {
     loadExisting(cal);
+}
+
+void CalibrationPanel::setViewSettings(bool showFloorGrid, float clickPlaneHeight,
+                                        bool showClickPlane, float psnOutputHeight) {
+    floorGridCheck_->setChecked(showFloorGrid);
+    clickPlaneSpin_->setValue(clickPlaneHeight);
+    showClickPlaneCheck_->setChecked(showClickPlane);
+    psnHeightSpin_->setValue(psnOutputHeight);
+}
+
+void CalibrationPanel::reset() {
+    disconnectVideoSignals();
+    if (video_) {
+        video_->setCalibrationMode(false);
+        video_->clearCalibOriginPoint();
+        video_->setCalibrationOverlay({});
+        video_->setCalibExplicitLines({});
+        video_->setCalibDistanceLabels({});
+    }
+    calibrateBtn_->setChecked(false);
+    result_ = {};
+    rectCorners_.clear();
+    rectStep_ = 0;
+    rect3DCorners_.clear();
+    rect3DStep_ = 0;
+    imagePoints_.clear();
+    stagePoints_.clear();
+    hasOrigin_ = false;
+    placing_   = Placing::None;
+    updateRectStepRows();
+    updateRectActionBtn();
+    updateRectOverlay();
+    updateRect3DStepRows();
+    updateRect3DActionBtn();
+    updateRect3DOverlay();
+    updateManualList();
+    updateManualStatus();
+    updateComputeButton();
+    update3DControls();
+    errorLabel_->setText({});
+    emit calibrationChanged(result_);
 }
 
 // ── Mode pages ────────────────────────────────────────────────────────────────
@@ -283,6 +414,185 @@ QWidget* CalibrationPanel::buildManualPage() {
     });
 
     return page;
+}
+
+// ── 3D Rectangle mode ─────────────────────────────────────────────────────────
+
+QWidget* CalibrationPanel::buildRect3DPage() {
+    auto* page = new QWidget;
+    auto* l    = new QVBoxLayout(page);
+    l->setSpacing(6);
+    l->setContentsMargins(0, 0, 0, 0);
+
+    auto* desc3D = new QLabel(
+        "<small>Tape a rectangle on the floor <b>and</b> place markers "
+        "at the same corners at a known height. "
+        "Click 4 floor corners, then the same 4 at marker height.</small>");
+    desc3D->setWordWrap(true);
+    l->addWidget(desc3D);
+
+    auto* dimFrame = new QFrame;
+    dimFrame->setFrameShape(QFrame::StyledPanel);
+    auto* dl = new QGridLayout(dimFrame);
+    dl->setSpacing(4);
+    dl->addWidget(new QLabel("Width X (m):"),    0, 0);
+    rect3DWSpin_ = new QDoubleSpinBox;
+    rect3DWSpin_->setRange(0.1, 9999); rect3DWSpin_->setValue(10.0);
+    rect3DWSpin_->setDecimals(2); rect3DWSpin_->setSingleStep(0.5);
+    dl->addWidget(rect3DWSpin_, 0, 1);
+    dl->addWidget(new QLabel("Depth Y (m):"),    1, 0);
+    rect3DHSpin_ = new QDoubleSpinBox;
+    rect3DHSpin_->setRange(0.1, 9999); rect3DHSpin_->setValue(8.0);
+    rect3DHSpin_->setDecimals(2); rect3DHSpin_->setSingleStep(0.5);
+    dl->addWidget(rect3DHSpin_, 1, 1);
+    dl->addWidget(new QLabel("Marker height (m):"), 2, 0);
+    rect3DMarkerSpin_ = new QDoubleSpinBox;
+    rect3DMarkerSpin_->setRange(0.1, 20.0); rect3DMarkerSpin_->setValue(2.0);
+    rect3DMarkerSpin_->setDecimals(2); rect3DMarkerSpin_->setSingleStep(0.1);
+    rect3DMarkerSpin_->setToolTip("Real-world height of the elevated markers above the floor.");
+    dl->addWidget(rect3DMarkerSpin_, 2, 1);
+    l->addWidget(dimFrame);
+
+    auto* stepsFrame = new QFrame;
+    stepsFrame->setFrameShape(QFrame::StyledPanel);
+    auto* sl = new QVBoxLayout(stepsFrame);
+    sl->setSpacing(2);
+    for (int i = 0; i < 8; i++) {
+        rect3DStepRows_[i] = new QLabel;
+        rect3DStepRows_[i]->setTextFormat(Qt::RichText);
+        rect3DStepRows_[i]->setMinimumWidth(0);
+        rect3DStepRows_[i]->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+        sl->addWidget(rect3DStepRows_[i]);
+    }
+    l->addWidget(stepsFrame);
+
+    auto* btnRow = new QHBoxLayout;
+    rect3DActionBtn_ = new QPushButton("Place Floor Corners");
+    rect3DResetBtn_  = new QPushButton("Reset");
+    rect3DResetBtn_->setEnabled(false);
+    btnRow->addWidget(rect3DActionBtn_);
+    btnRow->addWidget(rect3DResetBtn_);
+    l->addLayout(btnRow);
+
+    connect(rect3DActionBtn_, &QPushButton::clicked, this, [this]() {
+        if (!active_) return;
+        if (placing_ == Placing::Rect3DCorner) {
+            placing_ = Placing::None;
+            if (video_) video_->setCalibrationMode(false);
+        } else {
+            if (rect3DStep_ >= 8) rect3DStep_ = 0;
+            placing_ = Placing::Rect3DCorner;
+            if (video_) video_->setCalibrationMode(true);
+        }
+        updateRect3DStepRows(); updateRect3DActionBtn(); updateComputeButton();
+    });
+    connect(rect3DResetBtn_, &QPushButton::clicked, this, [this]() {
+        placing_ = Placing::None;
+        if (video_) video_->setCalibrationMode(false);
+        rect3DCorners_.clear(); rect3DStep_ = 0;
+        updateRect3DOverlay(); updateRect3DStepRows();
+        updateRect3DActionBtn(); rect3DResetBtn_->setEnabled(false);
+        updateComputeButton();
+    });
+    connect(rect3DWSpin_, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+            this, [this]() { updateRect3DStepRows(); updateRect3DOverlay(); });
+    connect(rect3DHSpin_, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+            this, [this]() { updateRect3DStepRows(); updateRect3DOverlay(); });
+
+    updateRect3DStepRows();
+    return page;
+}
+
+void CalibrationPanel::rect3DOnCornerPlaced(QPointF imagePos) {
+    if (rect3DStep_ >= 8) return;
+    if (rect3DCorners_.size() <= rect3DStep_) rect3DCorners_.resize(rect3DStep_ + 1);
+    rect3DCorners_[rect3DStep_] = imagePos;
+    rect3DStep_++;
+    if (rect3DStep_ < 8) {
+        placing_ = Placing::Rect3DCorner;
+        if (video_) video_->setCalibrationMode(true);
+    } else {
+        placing_ = Placing::None;
+        if (video_) video_->setCalibrationMode(false);
+    }
+    updateRect3DOverlay();
+    updateRect3DStepRows();
+    updateRect3DActionBtn();
+    updateComputeButton();
+    rect3DResetBtn_->setEnabled(true);
+}
+
+void CalibrationPanel::updateRect3DStepRows() {
+    double w = rect3DWSpin_->value(), h = rect3DHSpin_->value();
+    double hm = rect3DMarkerSpin_->value();
+    const char* names[8] = {
+        "Floor origin",  "Floor X-corner",  "Floor Z-corner",  "Floor diagonal",
+        "Elev. origin",  "Elev. X-corner",  "Elev. Z-corner",  "Elev. diagonal"
+    };
+    QStringList coords = {
+        "(0, 0, 0)",
+        QString("(%1, 0, 0)").arg(w,0,'f',2),
+        QString("(0, 0, %1)").arg(h,0,'f',2),
+        QString("(%1, 0, %2)").arg(w,0,'f',2).arg(h,0,'f',2),
+        QString("(0, %1, 0)").arg(hm,0,'f',2),
+        QString("(%1, %2, 0)").arg(w,0,'f',2).arg(hm,0,'f',2),
+        QString("(0, %1, %2)").arg(hm,0,'f',2).arg(h,0,'f',2),
+        QString("(%1, %2, %3)").arg(w,0,'f',2).arg(hm,0,'f',2).arg(h,0,'f',2),
+    };
+    const char* syms[8] = {
+        "\xe2\x91\xa0","\xe2\x91\xa1","\xe2\x91\xa2","\xe2\x91\xa3",
+        "\xe2\x91\xa4","\xe2\x91\xa5","\xe2\x91\xa6","\xe2\x91\xa7"
+    };
+    for (int i = 0; i < 8; i++) {
+        bool placed = (i < rect3DCorners_.size());
+        bool active = (placing_ == Placing::Rect3DCorner && i == rect3DStep_);
+        // Green for floor (0-3), blue for elevated (4-7)
+        QString baseCol = (i < 4) ? "#33cc55" : "#5599ff";
+        QString col  = placed ? baseCol : (active ? "#ffee66" : "#666666");
+        QString mark = placed ? "\xe2\x9c\x93" : (active ? "\xe2\x86\x92" : "\xe2\x97\x8b");
+        rect3DStepRows_[i]->setText(
+            QString("<span style='color:%1'>%2 %3 %4 <i>%5</i></span>")
+                .arg(col, syms[i], mark, names[i], coords[i]));
+    }
+}
+
+void CalibrationPanel::updateRect3DActionBtn() {
+    if (!active_) { rect3DActionBtn_->setText("Place Floor Corners"); return; }
+    if (placing_ == Placing::Rect3DCorner)
+        rect3DActionBtn_->setText("Cancel");
+    else if (rect3DStep_ >= 8)
+        rect3DActionBtn_->setText("Replace");
+    else if (rect3DStep_ >= 4)
+        rect3DActionBtn_->setText("Place Elevated Corners");
+    else if (rect3DStep_ > 0)
+        rect3DActionBtn_->setText("Continue");
+    else
+        rect3DActionBtn_->setText("Place Floor Corners");
+}
+
+void CalibrationPanel::updateRect3DOverlay() {
+    if (!video_) return;
+    video_->clearCalibOriginPoint();
+    video_->setCalibrationOverlay({}, -1);
+    video_->setCalibDistanceLabels({});
+    video_->setCalibExplicitLines({});
+    if (rect3DCorners_.isEmpty()) return;
+
+    // Show floor corners the same as regular rect
+    video_->setCalibOriginPoint(rect3DCorners_[0]);
+    QList<QPointF> pts;
+    for (int i = 1; i < qMin(rect3DCorners_.size(), 4); i++) pts << rect3DCorners_[i];
+    // Also add elevated corners with different styling — just add them as extra overlay points
+    for (int i = 4; i < rect3DCorners_.size(); i++) pts << rect3DCorners_[i];
+    video_->setCalibrationOverlay(pts, -1);
+
+    // Rectangle closing lines for floor
+    QList<QPair<QPointF,QPointF>> lines;
+    if (rect3DCorners_.size() >= 4) {
+        lines << qMakePair(rect3DCorners_[1], rect3DCorners_[3])
+              << qMakePair(rect3DCorners_[2], rect3DCorners_[3]);
+    }
+    video_->setCalibExplicitLines(lines);
 }
 
 // ── Point edit overlay (floats over main window, above the video) ─────────────
@@ -536,8 +846,9 @@ void CalibrationPanel::updateManualStatus() {
 
 void CalibrationPanel::updateComputeButton() {
     bool ok = false;
-    if (scheme_ == Scheme::Rectangle) ok = (rectCorners_.size() == 4);
-    else                              ok = (hasOrigin_ && imagePoints_.size() >= 3);
+    if (scheme_ == Scheme::Rectangle)   ok = (rectCorners_.size() == 4);
+    else if (scheme_ == Scheme::Rect3D) ok = (rect3DCorners_.size() == 8);
+    else                                ok = (hasOrigin_ && imagePoints_.size() >= 3);
     computeBtn_->setEnabled(ok);
 }
 
@@ -559,22 +870,40 @@ void CalibrationPanel::loadExisting(const CalibrationData& data) {
         && std::abs(zs[0]) < 0.01 && std::abs(zs[1]) < 0.01
         && std::abs(zs[2] - zs[3]) < 0.01
         && xs[2] > 0.01 && zs[2] > 0.01;
-    if (isRect) {
+
+    auto mapCorner = [&](int i, double W, double H) -> int {
+        bool ox = std::abs(sp[i].x()) < 0.01, oz = std::abs(sp[i].y()) < 0.01;
+        bool wx = std::abs(sp[i].x() - W) < 0.01;
+        bool hz = std::abs(sp[i].y() - H) < 0.01;
+        return (ox&&oz)?0 : (wx&&oz)?1 : (ox&&hz)?2 : 3;
+    };
+
+    if (data.is3DValid() && isRect && data.elevatedImagePoints.size() == 4) {
         double W = xs[2], H = zs[2];
         schemeCombo_->setCurrentIndex(0);
+        rect3DWSpin_->setValue(W);
+        rect3DHSpin_->setValue(H);
+        rect3DMarkerSpin_->setValue(double(data.markerHeight));
+        rect3DCorners_.resize(8);
+        rect3DStep_ = 8;
+        for (int i = 0; i < 4; i++) {
+            int ci = mapCorner(i, W, H);
+            rect3DCorners_[ci]     = data.imagePoints[i];
+            rect3DCorners_[ci + 4] = data.elevatedImagePoints[i];
+        }
+        updateRect3DOverlay(); updateRect3DStepRows();
+        updateRect3DActionBtn(); rect3DResetBtn_->setEnabled(true);
+    } else if (isRect) {
+        double W = xs[2], H = zs[2];
+        schemeCombo_->setCurrentIndex(1);
         rectWSpin_->setValue(W); rectHSpin_->setValue(H);
         rectCorners_.resize(4); rectStep_ = 4;
-        for (int i = 0; i < 4; i++) {
-            bool ox = std::abs(sp[i].x()) < 0.01, oz = std::abs(sp[i].y()) < 0.01;
-            bool wx = std::abs(sp[i].x() - W) < 0.01;
-            bool hz = std::abs(sp[i].y() - H) < 0.01;
-            int ci = (ox&&oz)?0 : (wx&&oz)?1 : (ox&&hz)?2 : 3;
-            rectCorners_[ci] = data.imagePoints[i];
-        }
+        for (int i = 0; i < 4; i++)
+            rectCorners_[mapCorner(i, W, H)] = data.imagePoints[i];
         updateRectOverlay(); updateRectStepRows();
         updateRectActionBtn(); rectResetBtn_->setEnabled(true);
     } else {
-        schemeCombo_->setCurrentIndex(1);
+        schemeCombo_->setCurrentIndex(2);
         int originIdx = 0; double minD = std::numeric_limits<double>::max();
         for (int i = 0; i < sp.size(); ++i) {
             double d = std::sqrt(sp[i].x()*sp[i].x() + sp[i].y()*sp[i].y());
@@ -592,10 +921,17 @@ void CalibrationPanel::loadExisting(const CalibrationData& data) {
     }
     if (data.isValid()) {
         previewCal_->fromList(data.homography);
+        if (data.is3DValid())
+            previewCal_->projectionFromList(data.projectionMatrix);
         result_ = data;
         errorLabel_->setText("Calibration valid.");
     }
     updateComputeButton();
+    update3DControls();
+}
+
+void CalibrationPanel::update3DControls() {
+    has3DControls_->setEnabled(result_.is3DValid());
 }
 
 // ── Slots ─────────────────────────────────────────────────────────────────────
@@ -604,10 +940,12 @@ void CalibrationPanel::onSchemeChanged(int idx) {
     placing_ = Placing::None;
     if (video_) video_->setCalibrationMode(false);
     hidePointOverlay();
-    scheme_ = (idx == 0) ? Scheme::Rectangle : Scheme::Manual;
+    scheme_ = (idx == 0) ? Scheme::Rect3D : (idx == 1) ? Scheme::Rectangle : Scheme::Manual;
     schemeStack_->setCurrentIndex(idx);
     if (scheme_ == Scheme::Rectangle) {
         updateRectOverlay(); updateRectStepRows(); updateRectActionBtn();
+    } else if (scheme_ == Scheme::Rect3D) {
+        updateRect3DOverlay(); updateRect3DStepRows(); updateRect3DActionBtn();
     } else {
         updateManualOverlay(); updateManualStatus();
     }
@@ -682,6 +1020,32 @@ void CalibrationPanel::onManualRemove() {
 }
 
 void CalibrationPanel::onCompute() {
+    if (scheme_ == Scheme::Rect3D) {
+        if (rect3DCorners_.size() < 8) return;
+        QList<QPointF> floorPts = rect3DCorners_.mid(0, 4);
+        QList<QPointF> elevPts  = rect3DCorners_.mid(4, 4);
+        double w = rect3DWSpin_->value(), h = rect3DHSpin_->value();
+        float  mh = float(rect3DMarkerSpin_->value());
+        QList<QPointF> stageXZ = {{0,0},{w,0},{0,h},{w,h}};
+        double err = previewCal_->compute3D(floorPts, elevPts, stageXZ, mh);
+        if (err < 0) {
+            errorLabel_->setText("3D failed — check corner placement.");
+            return;
+        }
+        errorLabel_->setText(QString("3D error: %1 px").arg(err, 0, 'f', 2));
+        result_.imagePoints          = floorPts;
+        result_.stagePoints          = stageXZ;
+        result_.homography           = previewCal_->toList();
+        result_.elevatedImagePoints  = elevPts;
+        result_.markerHeight         = mh;
+        result_.projectionMatrix     = previewCal_->projectionToList();
+        if (video_) video_->setCalibration(previewCal_);
+        emit calibrationChanged(result_);
+        calibrateBtn_->setChecked(false);
+        update3DControls();
+        return;
+    }
+
     QList<QPointF> allImg, allStg;
     if (scheme_ == Scheme::Rectangle) {
         if (rectCorners_.size() < 4) return;
@@ -699,12 +1063,16 @@ void CalibrationPanel::onCompute() {
         return;
     }
     errorLabel_->setText(QString("Error: %1 px").arg(err, 0, 'f', 2));
-    result_.imagePoints = allImg;
-    result_.stagePoints = allStg;
-    result_.homography  = previewCal_->toList();
+    result_.imagePoints      = allImg;
+    result_.stagePoints      = allStg;
+    result_.homography       = previewCal_->toList();
+    result_.elevatedImagePoints.clear();
+    result_.markerHeight     = 0.0f;
+    result_.projectionMatrix.clear();
     if (video_) video_->setCalibration(previewCal_);
     emit calibrationChanged(result_);
     calibrateBtn_->setChecked(false);
+    update3DControls();
 }
 
 void CalibrationPanel::onTest(bool checked) {

@@ -183,7 +183,7 @@ void PsnSender::sendDataPacketsV2(const QMap<int, QPair<float,float>>& positions
         lastPos_[id]    = {x, z};
         lastTimeMs_[id] = nowMs;
 
-        const QByteArray posChunk    = makeDataTrackerPosChunk(x, -z, 0.0f);
+        const QByteArray posChunk    = makeDataTrackerPosChunk(x, -z, outputHeight_);
         const QByteArray speedChunk  = makeDataTrackerSpeedChunk(vx, -vz, 0.0f);
         const QByteArray statusChunk = makeDataTrackerStatusChunk(1.0f);
 

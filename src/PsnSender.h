@@ -14,8 +14,9 @@ public:
     explicit PsnSender(QObject* parent = nullptr);
 
     void configure(const NetworkConfig& cfg);
+    void setOutputHeight(float h) { outputHeight_ = h; }
 
-    // positions: tracker_id → (x_m, z_m)  — Y is always 0 (floor)
+    // positions: tracker_id → (x_m, z_m)
     void sendPositions(const QMap<int, QPair<float,float>>& positions,
                        const QList<TrackerConfig>& trackers);
 
@@ -31,6 +32,7 @@ private:
     PsnMode      psnMode_   = PsnMode::Multicast;
 
     QString      systemName_;
+    float        outputHeight_ = 0.0f;
 
     quint8  dataFrameId_ = 1;
     quint8  infoFrameId_ = 1;

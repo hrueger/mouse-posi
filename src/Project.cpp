@@ -81,6 +81,10 @@ Project Project::load(const QString& path) {
     p.calibration.stagePoints = jsonToPointList(cal["stagePoints"].toArray());
     for (const auto& v : cal["homography"].toArray())
         p.calibration.homography << v.toDouble();
+    p.calibration.elevatedImagePoints = jsonToPointList(cal["elevatedImagePoints"].toArray());
+    p.calibration.markerHeight = float(cal["markerHeight"].toDouble(0.0));
+    for (const auto& v : cal["projectionMatrix"].toArray())
+        p.calibration.projectionMatrix << v.toDouble();
 
     // Sanitize calibration: discard if point lists are mismatched or homography is wrong size
     if (p.calibration.imagePoints.size() != p.calibration.stagePoints.size()
@@ -99,6 +103,12 @@ Project Project::load(const QString& path) {
     p.network.port            = static_cast<quint16>(net["port"].toInt(56565));
     p.network.psnInterface    = net["psnInterface"].toString();
     p.network.sessionInterface= net["sessionInterface"].toString();
+
+    QJsonObject cv = root["calibrationView"].toObject();
+    p.calibrationView.showFloorGrid    = cv["showFloorGrid"].toBool(false);
+    p.calibrationView.clickPlaneHeight = float(cv["clickPlaneHeight"].toDouble(0.0));
+    p.calibrationView.showClickPlane   = cv["showClickPlane"].toBool(false);
+    p.calibrationView.psnOutputHeight  = float(cv["psnOutputHeight"].toDouble(0.0));
 
     QJsonObject stMap = root["stationTrackers"].toObject();
     for (auto it = stMap.constBegin(); it != stMap.constEnd(); ++it)
@@ -127,6 +137,11 @@ void Project::save(const QString& path) const {
     QJsonArray hArr;
     for (double v : calibration.homography) hArr << v;
     cal["homography"] = hArr;
+    cal["elevatedImagePoints"] = pointListToJson(calibration.elevatedImagePoints);
+    cal["markerHeight"] = double(calibration.markerHeight);
+    QJsonArray pArr;
+    for (double v : calibration.projectionMatrix) pArr << v;
+    cal["projectionMatrix"] = pArr;
     root["calibration"] = cal;
 
     QJsonObject net;
@@ -142,6 +157,13 @@ void Project::save(const QString& path) const {
     net["psnInterface"]     = network.psnInterface;
     net["sessionInterface"] = network.sessionInterface;
     root["network"] = net;
+
+    QJsonObject cv;
+    cv["showFloorGrid"]    = calibrationView.showFloorGrid;
+    cv["clickPlaneHeight"] = double(calibrationView.clickPlaneHeight);
+    cv["showClickPlane"]   = calibrationView.showClickPlane;
+    cv["psnOutputHeight"]  = double(calibrationView.psnOutputHeight);
+    root["calibrationView"] = cv;
 
     QJsonObject stMap;
     for (auto it = stationTrackers.constBegin(); it != stationTrackers.constEnd(); ++it)

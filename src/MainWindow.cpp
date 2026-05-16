@@ -115,14 +115,13 @@ MainWindow::MainWindow(NdiReceiver* ndi, QWidget* parent) : QMainWindow(parent) 
     statusTracker_->setContentsMargins(4, 0, 8, 0);
     statusNdi_->setContentsMargins(8, 0, 8, 0);
     statusPos_->setContentsMargins(8, 0, 4, 0);
-    statusCalib_->setContentsMargins(8, 0, 4, 0);
     statusBar()->addWidget(statusTracker_);
     statusBar()->addWidget(makeSep());
     statusBar()->addWidget(statusNdi_);
     statusBar()->addWidget(makeSep());
     statusBar()->addWidget(statusPos_);
-    statusBar()->addWidget(makeSep());
-    statusBar()->addWidget(statusCalib_);
+
+    statusBar()->addPermanentWidget(statusCalib_);
 
     statusPsnOut_ = new QLabel("● PSN Out");
     statusPsnOut_->setStyleSheet("color: #cc3333; padding: 0 8px;");
@@ -174,6 +173,7 @@ MainWindow::MainWindow(NdiReceiver* ndi, QWidget* parent) : QMainWindow(parent) 
             (sessionMgr_->state() == SessionManager::State::Joined &&
              sessionMgr_->localRole() == SessionRole::Admin))
             sessionMgr_->broadcastProjectState(project_);
+        markDirty();
     });
 
     connect(trackersPanel_, &TrackersPanel::trackerAccessChanged,
@@ -201,6 +201,7 @@ MainWindow::MainWindow(NdiReceiver* ndi, QWidget* parent) : QMainWindow(parent) 
             psnReceiver_->stop();
             psnReceiver_->wait();
         }
+        markDirty();
     });
 
     connect(calibrationPanel_, &CalibrationPanel::calibrationActiveChanged,
@@ -209,7 +210,12 @@ MainWindow::MainWindow(NdiReceiver* ndi, QWidget* parent) : QMainWindow(parent) 
     connect(calibrationPanel_, &CalibrationPanel::calibrationChanged,
             this, [this](const CalibrationData& cal) {
         project_.calibration = cal;
-        if (cal.isValid()) calibration_.fromList(cal.homography);
+        if (cal.isValid()) {
+            calibration_.fromList(cal.homography);
+            if (cal.is3DValid())
+                calibration_.projectionFromList(cal.projectionMatrix);
+            video_->setCalibration(&calibration_);
+        }
         if (calibrationSection_ && cal.isValid())
             calibrationSection_->setExpanded(false);
         updateCalibStatus();
@@ -217,20 +223,56 @@ MainWindow::MainWindow(NdiReceiver* ndi, QWidget* parent) : QMainWindow(parent) 
             (sessionMgr_->state() == SessionManager::State::Joined &&
              sessionMgr_->localRole() == SessionRole::Admin))
             sessionMgr_->broadcastProjectState(project_);
+        markDirty();
+    });
+
+    connect(calibrationPanel_, &CalibrationPanel::showFloorGridChanged,
+            this, [this](bool on) {
+        project_.calibrationView.showFloorGrid = on;
+        video_->setShowFloorGrid(on);
+        markDirty();
+    });
+    connect(calibrationPanel_, &CalibrationPanel::showClickPlaneChanged,
+            this, [this](bool on) {
+        project_.calibrationView.showClickPlane = on;
+        video_->setShowClickPlane(on);
+        markDirty();
+    });
+    connect(calibrationPanel_, &CalibrationPanel::clickPlaneHeightChanged,
+            this, [this](float h) {
+        project_.calibrationView.clickPlaneHeight = h;
+        clickPlaneHeight_ = h;
+        video_->setClickPlaneHeight(h);
+        markDirty();
+    });
+    connect(calibrationPanel_, &CalibrationPanel::psnOutputHeightChanged,
+            this, [this](float h) {
+        project_.calibrationView.psnOutputHeight = h;
+        video_->setPsnOutputHeight(h);
+        psnSender_->setOutputHeight(h);
+        markDirty();
     });
 
     connect(video_, &VideoWidget::mousePosInFrame, this, [this](QPointF framePt) {
         if (video_->mouseHeld() && calibration_.isValid()) {
             int id = trackersPanel_->activeTrackerId();
             if (id >= 0) {
-                QPointF s = calibration_.pixelToStage(framePt);
-                trackerPositions_[id] = {float(s.x()), float(s.y())};
-                statusPos_->setText(QString("X: %1m  Y: %2m")
-                    .arg(s.x(), 0, 'f', 2).arg(s.y(), 0, 'f', 2));
-                log(QString("DRAG  tracker=%1  frame=(%2,%3)  stage=(%4,%5)")
+                QPointF raw = calibration_.pixelToStage(framePt);
+                QPointF stg;
+                if (calibration_.has3D())
+                    stg = calibration_.pixelToStageAtHeight(framePt, clickPlaneHeight_);
+                else {
+                    stg = raw;
+                }
+                trackerRawPositions_[id] = {float(raw.x()), float(raw.y())};
+                trackerPositions_[id]    = {float(stg.x()), float(stg.y())};
+                statusPos_->setText(QString("X: %1m  Z: %2m")
+                    .arg(stg.x(), 0, 'f', 2).arg(stg.y(), 0, 'f', 2));
+                log(QString("DRAG  tracker=%1  frame=(%2,%3)  floor=(%4,%5)  plane=(%6,%7)")
                     .arg(id)
                     .arg(framePt.x(), 0, 'f', 1).arg(framePt.y(), 0, 'f', 1)
-                    .arg(s.x(), 0, 'f', 4).arg(s.y(), 0, 'f', 4));
+                    .arg(raw.x(), 0, 'f', 4).arg(raw.y(), 0, 'f', 4)
+                    .arg(stg.x(), 0, 'f', 4).arg(stg.y(), 0, 'f', 4));
             }
         }
     });
@@ -238,14 +280,22 @@ MainWindow::MainWindow(NdiReceiver* ndi, QWidget* parent) : QMainWindow(parent) 
         if (!calibration_.isValid()) return;
         int id = trackersPanel_->activeTrackerId();
         if (id < 0) return;
-        QPointF s = calibration_.pixelToStage(framePt);
-        trackerPositions_[id] = {float(s.x()), float(s.y())};
-        statusPos_->setText(QString("X: %1m  Y: %2m")
-            .arg(s.x(), 0, 'f', 2).arg(s.y(), 0, 'f', 2));
-        log(QString("CLICK tracker=%1  frame=(%2,%3)  stage=(%4,%5)")
+        QPointF raw = calibration_.pixelToStage(framePt);
+        QPointF stg;
+        if (calibration_.has3D())
+            stg = calibration_.pixelToStageAtHeight(framePt, clickPlaneHeight_);
+        else {
+            stg = raw;
+        }
+        trackerRawPositions_[id] = {float(raw.x()), float(raw.y())};
+        trackerPositions_[id]    = {float(stg.x()), float(stg.y())};
+        statusPos_->setText(QString("X: %1m  Z: %2m")
+            .arg(stg.x(), 0, 'f', 2).arg(stg.y(), 0, 'f', 2));
+        log(QString("CLICK tracker=%1  frame=(%2,%3)  floor=(%4,%5)  plane=(%6,%7)")
             .arg(id)
             .arg(framePt.x(), 0, 'f', 1).arg(framePt.y(), 0, 'f', 1)
-            .arg(s.x(), 0, 'f', 4).arg(s.y(), 0, 'f', 4));
+            .arg(raw.x(), 0, 'f', 4).arg(raw.y(), 0, 'f', 4)
+            .arg(stg.x(), 0, 'f', 4).arg(stg.y(), 0, 'f', 4));
     });
 
     auto toggleFullscreen = [this]() {
@@ -366,6 +416,7 @@ MainWindow::MainWindow(NdiReceiver* ndi, QWidget* parent) : QMainWindow(parent) 
                     projectPath_ = path;
                     loadProject(p);
                     saveRecent(path);
+                    markSaved();
                 } catch (const std::exception& e) {
                     QMessageBox::critical(this, "Invalid Showfile",
                         QString("Could not open \"%1\":\n\n%2")
@@ -504,6 +555,7 @@ void MainWindow::setNdiSource(const QString& source) {
     statusNdi_->setText(source.isEmpty() ? "No NDI source" : "NDI: " + source + " (connecting…)");
     streamPanel_->setCurrentNdiSource(source);
     video_->setNdiSourceConfigured(!source.isEmpty());
+    markDirty();
 }
 
 void MainWindow::setWebcamSource(const QString& device) {
@@ -520,6 +572,7 @@ void MainWindow::setWebcamSource(const QString& device) {
 
     statusNdi_->setText(device.isEmpty() ? "No webcam" : "Webcam: " + device + " (starting…)");
     video_->setNdiSourceConfigured(!device.isEmpty());
+    markDirty();
 #else
     (void)device;
     statusNdi_->setText("Webcam support unavailable (install Qt Multimedia)");
@@ -541,6 +594,7 @@ void MainWindow::setDecklinkSource(const QString& device) {
 
     statusNdi_->setText(device.isEmpty() ? "No DeckLink device" : "DeckLink: " + device + " (starting…)");
     video_->setNdiSourceConfigured(!device.isEmpty());
+    markDirty();
 #else
     (void)device;
     statusNdi_->setText("DeckLink support unavailable");
@@ -549,6 +603,7 @@ void MainWindow::setDecklinkSource(const QString& device) {
 }
 
 void MainWindow::applyProject() {
+    applyingProject_ = true;
     updateWindowTitle();
     trackersPanel_->setTrackers(project_.trackers);
     trackerBar_->setTrackers(project_.trackers);
@@ -569,6 +624,9 @@ void MainWindow::applyProject() {
         setNdiSource(project_.ndiSource);
     if (project_.calibration.isValid()) {
         calibration_.fromList(project_.calibration.homography);
+        if (project_.calibration.is3DValid())
+            calibration_.projectionFromList(project_.calibration.projectionMatrix);
+        video_->setCalibration(&calibration_);
         const auto& h = project_.calibration.homography;
         if (h.size() == 9)
             log(QString("CALIBRATION  H=[%1 %2 %3 | %4 %5 %6 | %7 %8 %9]")
@@ -579,21 +637,35 @@ void MainWindow::applyProject() {
         if (calibrationSection_)
             calibrationSection_->setExpanded(false);
     }
+    const auto& cv = project_.calibrationView;
+    calibrationPanel_->setViewSettings(cv.showFloorGrid, cv.clickPlaneHeight,
+                                        cv.showClickPlane, cv.psnOutputHeight);
+    clickPlaneHeight_ = cv.clickPlaneHeight;
     updateCalibStatus();
+    applyingProject_ = false;
 }
 
 void MainWindow::updateWindowTitle() {
     const QString base = QStringLiteral("OnPoint");
+    const QString dirty = projectDirty_ ? QStringLiteral("*") : QString();
     if (projectPath_.isEmpty()) {
-        setWindowTitle(QString("%1 — Untitled").arg(base));
+        setWindowTitle(QString("%1 — Untitled%2").arg(base, dirty));
         return;
     }
-    setWindowTitle(QString("%1 — %2").arg(base, QFileInfo(projectPath_).fileName()));
+    setWindowTitle(QString("%1 — %2%3").arg(base, QFileInfo(projectPath_).fileName(), dirty));
 }
 
 void MainWindow::closeEvent(QCloseEvent* e) {
-    if (!projectPath_.isEmpty())
-        project_.save(projectPath_);
+    if (projectDirty_) {
+        QString name = projectPath_.isEmpty()
+            ? QStringLiteral("Untitled")
+            : QFileInfo(projectPath_).fileName();
+        auto btn = QMessageBox::question(this, "Unsaved Changes",
+            QString("Save changes to \"%1\" before closing?").arg(name),
+            QMessageBox::Save | QMessageBox::Discard | QMessageBox::Cancel);
+        if (btn == QMessageBox::Cancel) { e->ignore(); return; }
+        if (btn == QMessageBox::Save)   onSaveProject();
+    }
     e->accept();
 }
 
@@ -604,6 +676,7 @@ void MainWindow::changeEvent(QEvent* e) {
         sidebar_->setFullscreenMode(isFullScreen());
     }
 }
+
 
 void MainWindow::onTimer() {
     if (trackerPositions_ != lastLoggedPositions_) {
@@ -623,6 +696,7 @@ void MainWindow::onTimer() {
         lastLoggedPositions_ = trackerPositions_;
     }
     video_->setOwnPositions(trackerPositions_, project_.trackers);
+    video_->setOwnRawPositions(trackerRawPositions_);
     if (!trackerPositions_.isEmpty())
         psnSender_->sendPositions(trackerPositions_, project_.trackers);
     frameCount_++;
@@ -664,12 +738,29 @@ void MainWindow::updateStatsTimer() {
 
 void MainWindow::updateCalibStatus() {
     if (calibration_.isValid()) {
-        statusCalib_->setText("Calibrated");
-        statusCalib_->setStyleSheet("color: palette(mid);");
+        statusCalib_->setText(calibration_.has3D() ? "● Calibrated · 3D" : "● Calibrated · 2D");
+        statusCalib_->setStyleSheet("color: #33aa44; padding: 0 4px;");
     } else {
-        statusCalib_->setText("No calibration");
-        statusCalib_->setStyleSheet("color: #cc9900;");
+        statusCalib_->setText("● No calibration");
+        statusCalib_->setStyleSheet("color: #cc9900; padding: 0 4px;");
     }
+}
+
+void MainWindow::updateSaveStatus() {
+    updateWindowTitle();
+}
+
+void MainWindow::markDirty() {
+    if (applyingProject_) return;
+    if (!projectDirty_) {
+        projectDirty_ = true;
+        updateSaveStatus();
+    }
+}
+
+void MainWindow::markSaved() {
+    projectDirty_ = false;
+    updateSaveStatus();
 }
 
 void MainWindow::updateSessionStatus() {
@@ -746,7 +837,12 @@ void MainWindow::onNewProject() {
     project_     = Project::defaultProject();
     projectPath_ = QString();
     trackerPositions_.clear();
+    trackerRawPositions_.clear();
+    calibration_ = Calibration{};
+    calibrationPanel_->reset();
+    video_->setCalibration(&calibration_);
     applyProject();
+    markSaved();
 }
 
 void MainWindow::onOpenProject() {
@@ -763,6 +859,7 @@ void MainWindow::onOpenProject() {
         loadProject(p);
         saveRecent(path);
         updateWindowTitle();
+        markSaved();
     } catch (const std::exception& e) {
         QMessageBox::critical(this, "Invalid Showfile",
             QString("Could not open \"%1\":\n\n%2")
@@ -774,6 +871,7 @@ void MainWindow::onSaveProject() {
     if (projectPath_.isEmpty()) { onSaveProjectAs(); return; }
     project_.save(projectPath_);
     updateWindowTitle();
+    markSaved();
 }
 
 void MainWindow::onSaveProjectAs() {
@@ -792,6 +890,7 @@ void MainWindow::onSaveProjectAs() {
     project_.save(path);
     saveRecent(path);
     updateWindowTitle();
+    markSaved();
 }
 
 void MainWindow::saveRecent(const QString& path) {

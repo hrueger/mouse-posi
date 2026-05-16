@@ -65,6 +65,9 @@ private:
     void updateStatsTimer();
     void updateSessionStatus();
     void updateCalibStatus();
+    void updateSaveStatus();
+    void markDirty();
+    void markSaved();
     void updateTrackerBarRestriction();
     void updateTrackersPanelPeers();
     void log(const QString& msg);
@@ -98,6 +101,9 @@ private:
     bool        calibActive_ = false;
 
     QMap<int, QPair<float,float>> trackerPositions_;
+    QMap<int, QPair<float,float>> trackerRawPositions_;
+
+    float clickPlaneHeight_ = 0.0f;
 
     QLabel*       statusPos_;
     QLabel*       statusTracker_;
@@ -106,6 +112,9 @@ private:
     QLabel*       statusSession_;
     QLabel*       statusPsnOut_;
     QPushButton*  leaveSessionBtn_;
+
+    bool projectDirty_    = false;
+    bool applyingProject_ = false;
 
     // Stats counters
     int     frameCount_   = 0;

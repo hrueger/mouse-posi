@@ -35,6 +35,10 @@ void VideoWidget::setOwnPositions(const QMap<int, QPair<float,float>>& positions
     ownTrackers_  = trackers;
 }
 
+void VideoWidget::setOwnRawPositions(const QMap<int, QPair<float,float>>& rawPositions) {
+    ownRawPositions_ = rawPositions;
+}
+
 void VideoWidget::setActiveTracker(int id, const QColor& color) {
     activeTrackerId_ = id;
     activeColor_     = color;
@@ -82,6 +86,26 @@ void VideoWidget::clearCalibOriginPoint() {
 
 void VideoWidget::setCalibDistanceLabels(const QList<QString>& labels) {
     calibDistanceLabels_ = labels;
+    update();
+}
+
+void VideoWidget::setShowFloorGrid(bool on) {
+    showFloorGrid_ = on;
+    update();
+}
+
+void VideoWidget::setClickPlaneHeight(float h) {
+    clickPlaneHeight_ = h;
+    update();
+}
+
+void VideoWidget::setShowClickPlane(bool on) {
+    showClickPlane_ = on;
+    update();
+}
+
+void VideoWidget::setPsnOutputHeight(float h) {
+    psnOutputHeight_ = h;
     update();
 }
 
@@ -159,7 +183,8 @@ void VideoWidget::drawAxisLegend(QPainter& p) const {
     double vh = frame_.isNull() ? height() : frame_.height() * scale_.height();
     QPointF bl(offset_.x() + 10, offset_.y() + vh - 10);
 
-    const double boxW = 82, boxH = 68;
+    bool show3D = calibration_ && calibration_->has3D();
+    const double boxW = show3D ? 100 : 82, boxH = show3D ? 80 : 68;
     QRectF box(bl.x(), bl.y() - boxH, boxW, boxH);
 
     p.setPen(Qt::NoPen);
@@ -167,29 +192,37 @@ void VideoWidget::drawAxisLegend(QPainter& p) const {
     p.drawRoundedRect(box, 5, 5);
 
     // Axis cross origin inside the box (lower-left quadrant of box)
-    QPointF axO(box.left() + 24, box.bottom() - 18);
+    QPointF axO(box.left() + 28, box.bottom() - 18);
     const double axLen = 24;
 
-    QPointF xDir(axLen, 0);  // default: +X right
-    QPointF yDir(0, -axLen); // default: +Y up
+    QPointF xDir(axLen, 0);   // default: +X right
+    QPointF yDir(0, -axLen);  // default: +Y up
+    QPointF zDir(-axLen * 0.6, -axLen * 0.6); // default: +Z up-left (height)
 
     if (calibration_ && calibration_->isValid()) {
-        // Compute actual pixel directions from calibration
         QPointF o  = frameToWidget(calibration_->stageToPixel(0, 0));
         QPointF xp = frameToWidget(calibration_->stageToPixel(1, 0));
         QPointF yp = frameToWidget(calibration_->stageToPixel(0, 1));
-        QPointF xd = xp - o;
-        QPointF yd = yp - o;
+        QPointF xd = xp - o, yd = yp - o;
         double xl = std::sqrt(xd.x()*xd.x() + xd.y()*xd.y());
         double yl = std::sqrt(yd.x()*yd.x() + yd.y()*yd.y());
         if (xl > 0.1) xDir = xd / xl * axLen;
         if (yl > 0.1) yDir = yd / yl * axLen;
+
+        if (show3D) {
+            QPointF zBase = frameToWidget(calibration_->stageAtHeightToPixel(0, 0, 0));
+            QPointF zTip  = frameToWidget(calibration_->stageAtHeightToPixel(0, 1, 0));
+            QPointF zd    = zTip - zBase;
+            double   zl   = std::sqrt(zd.x()*zd.x() + zd.y()*zd.y());
+            if (zl > 0.1) zDir = zd / zl * axLen;
+        }
     }
+
+    p.setFont(QFont("Arial", 8, QFont::Bold));
 
     // X axis — green
     p.setPen(QPen(QColor(80, 220, 80), 2));
     drawArrow(p, axO, axO + xDir, 6);
-    p.setFont(QFont("Arial", 8, QFont::Bold));
     p.drawText(axO + xDir + QPointF(3, 4), "+X");
 
     // Y axis — cornflower blue
@@ -197,6 +230,14 @@ void VideoWidget::drawAxisLegend(QPainter& p) const {
     drawArrow(p, axO, axO + yDir, 6);
     QPointF yLabelOff = yDir + QPointF(yDir.x() > 0 ? 3 : -22, yDir.y() > 0 ? 10 : -3);
     p.drawText(axO + yLabelOff, "+Y");
+
+    // Z axis (height) — amber, only when 3D calibrated
+    if (show3D) {
+        p.setPen(QPen(QColor(255, 180, 40), 2));
+        drawArrow(p, axO, axO + zDir, 6);
+        QPointF zLabelOff = zDir + QPointF(zDir.x() > 0 ? 3 : -22, zDir.y() > 0 ? 10 : -3);
+        p.drawText(axO + zLabelOff, "+Z");
+    }
 
     // Dot at axis origin
     p.setPen(Qt::NoPen);
@@ -207,7 +248,7 @@ void VideoWidget::drawAxisLegend(QPainter& p) const {
     p.setPen(QColor(180, 180, 180));
     p.setFont(QFont("Arial", 7));
     p.drawText(QRectF(box.left() + 2, box.top() + 3, boxW - 4, 13),
-               Qt::AlignCenter, "Stage axes");
+               Qt::AlignCenter, show3D ? "Stage axes (3D)" : "Stage axes");
 }
 
 void VideoWidget::drawCalibOverlay(QPainter& p) const {
@@ -312,6 +353,136 @@ void VideoWidget::drawCalibOverlay(QPainter& p) const {
         drawAxisLegend(p);
 }
 
+void VideoWidget::drawFloorGrid(QPainter& p) const {
+    if (!showFloorGrid_ || !calibration_ || !calibration_->isValid()) return;
+    p.save();
+    p.setRenderHint(QPainter::Antialiasing, false);
+    p.setClipRect(QRectF(offset_.x(), offset_.y(),
+                         frame_.width()  * scale_.width(),
+                         frame_.height() * scale_.height()));
+
+    const int kRange = 25;
+
+    // ── Floor plane (Y=0) — green ─────────────────────────────────────────
+    const QColor floorGrid(80, 200, 80, 45);
+    const QColor floorAxis(80, 220, 80, 90);
+    for (int x = -kRange; x <= kRange; x++) {
+        p.setPen(QPen(x == 0 ? floorAxis : floorGrid, x == 0 ? 1.5 : 1.0));
+        p.drawLine(frameToWidget(calibration_->stageToPixel(float(x), float(-kRange))),
+                   frameToWidget(calibration_->stageToPixel(float(x), float( kRange))));
+    }
+    for (int z = -kRange; z <= kRange; z++) {
+        p.setPen(QPen(z == 0 ? floorAxis : floorGrid, z == 0 ? 1.5 : 1.0));
+        p.drawLine(frameToWidget(calibration_->stageToPixel(float(-kRange), float(z))),
+                   frameToWidget(calibration_->stageToPixel(float( kRange), float(z))));
+    }
+
+    p.restore();
+}
+
+void VideoWidget::drawClickPlaneOverlay(QPainter& p) const {
+    if (!showClickPlane_ || !calibration_ || !calibration_->isValid()) return;
+
+    const double vw = frame_.isNull() ? width()  : frame_.width()  * scale_.width();
+    const double vh = frame_.isNull() ? height() : frame_.height() * scale_.height();
+    const float  h  = clickPlaneHeight_;
+
+    // ── Amber click-plane grid (requires 3D calibration) ─────────────────
+    bool canDraw3D = calibration_->has3D();
+
+    if (canDraw3D) {
+        p.save();
+        p.setRenderHint(QPainter::Antialiasing, false);
+        p.setClipRect(QRectF(offset_.x(), offset_.y(), vw, vh));
+
+        const int kRange = 25;
+        const QColor clickGrid(255, 160, 40, 50);
+        const QColor clickAxis(255, 190, 60, 100);
+
+        std::function<QPointF(float, float)> clickPt;
+        clickPt = [&](float stX, float stZ) -> QPointF {
+            return frameToWidget(calibration_->stageAtHeightToPixel(stX, h, stZ));
+        };
+
+        for (int x = -kRange; x <= kRange; x++) {
+            p.setPen(QPen(x == 0 ? clickAxis : clickGrid, x == 0 ? 1.5 : 1.0));
+            p.drawLine(clickPt(float(x), float(-kRange)),
+                       clickPt(float(x), float( kRange)));
+        }
+        for (int z = -kRange; z <= kRange; z++) {
+            p.setPen(QPen(z == 0 ? clickAxis : clickGrid, z == 0 ? 1.5 : 1.0));
+            p.drawLine(clickPt(float(-kRange), float(z)),
+                       clickPt(float( kRange), float(z)));
+        }
+        p.restore();
+    }
+
+    // ── Label ─────────────────────────────────────────────────────────────
+    const QString label = QString("Click plane: %1 m").arg(double(h), 0, 'f', 2);
+    QFont f("Arial", 9);
+    p.setFont(f);
+    QFontMetrics fm(f);
+    QRectF lr = fm.boundingRect(label);
+    lr.adjust(-5, -3, 5, 3);
+    lr.moveBottomRight(QPointF(offset_.x() + vw - 8, offset_.y() + vh - 8));
+
+    p.setPen(Qt::NoPen);
+    p.setBrush(QColor(60, 80, 140, 200));
+    p.drawRoundedRect(lr, 4, 4);
+    p.setPen(QColor(180, 210, 255));
+    p.setBrush(Qt::NoBrush);
+    p.drawText(lr, Qt::AlignCenter, label);
+}
+
+void VideoWidget::drawHeightGhosts(QPainter& p) const {
+    if (!calibration_ || !calibration_->isValid()) return;
+
+    for (auto it = ownPositions_.cbegin(); it != ownPositions_.cend(); ++it) {
+        int id = it.key();
+        QColor color = Qt::white;
+        for (const auto& t : ownTrackers_)
+            if (t.id == id) { color = t.color; break; }
+
+        // Corrected position — where the person actually is (main dot, click plane)
+        QPointF wpt = frameToWidget(calibration_->stageToPixel(it.value().first,
+                                                                it.value().second));
+
+        // ① Floor / calibration-plane shadow.
+        //    If parallax correction is active, the raw position differs from the
+        //    corrected one and shows where the image projects onto the floor.
+        //    Otherwise raw == corrected and the shadow sits under the main dot.
+        QPointF shadowWpt = wpt;
+        if (ownRawPositions_.contains(id)) {
+            const auto& raw = ownRawPositions_[id];
+            shadowWpt = frameToWidget(calibration_->stageToPixel(raw.first, raw.second));
+        }
+        p.setPen(Qt::NoPen);
+        p.setBrush(QColor(0, 0, 0, 100));
+        p.setOpacity(1.0);
+        p.drawEllipse(shadowWpt, 14.0, 14.0);
+        // Shadow cross-hair nub
+        p.setPen(QPen(QColor(0, 0, 0, 80), 1.5));
+        p.drawLine(shadowWpt + QPointF(-8, 0), shadowWpt + QPointF(8, 0));
+        p.drawLine(shadowWpt + QPointF(0, -8), shadowWpt + QPointF(0, 8));
+
+        // ② PSN output height ring — dashed, tracker colour
+        QColor psnColor = color;
+        psnColor.setAlphaF(0.45);
+        p.setPen(QPen(psnColor, 2.5, Qt::DashLine));
+        p.setBrush(Qt::NoBrush);
+        p.drawEllipse(wpt, 18.0, 18.0);
+
+        // ③ Click-plane ring — solid, tracker colour, slightly translucent.
+        //    Main dot painted on top by the tracker loop.
+        QColor clickColor = color;
+        clickColor.setAlphaF(0.40);
+        p.setPen(QPen(clickColor, 2.0));
+        p.drawEllipse(wpt, 13.0, 13.0);
+
+        p.setOpacity(1.0);
+    }
+}
+
 int VideoWidget::nearestCalibPoint(QPointF widgetPos, double threshold) const {
     for (int i = 0; i < calibOverlayPoints_.size(); ++i) {
         if (QLineF(widgetPos, frameToWidget(calibOverlayPoints_[i])).length() < threshold)
@@ -347,6 +518,9 @@ void VideoWidget::paintEvent(QPaintEvent*) {
         p.drawPixmap(int(offset_.x()), int(offset_.y()), scaledFrame_);
     }
 
+    // Floor grid — drawn behind everything else
+    drawFloorGrid(p);
+
     // Calibration overlay is always drawn, independent of calibration validity.
     drawCalibOverlay(p);
 
@@ -364,7 +538,10 @@ void VideoWidget::paintEvent(QPaintEvent*) {
         return;
     }
 
-    // ── Own tracker positions ─────────────────────────────────────────────
+    // ── Height ghosts: floor shadow + PSN output ring (drawn behind main dots) ──
+    drawHeightGhosts(p);
+
+    // ── Own tracker positions (main dot = click plane) ────────────────────
     for (auto it = ownPositions_.cbegin(); it != ownPositions_.cend(); ++it) {
         int id = it.key();
         QColor color = Qt::white;
@@ -392,6 +569,9 @@ void VideoWidget::paintEvent(QPaintEvent*) {
                        id, color.lighter(130), false);
         p.setOpacity(1.0);
     }
+
+    // ── Click plane indicator ─────────────────────────────────────────────
+    drawClickPlaneOverlay(p);
 
     // ── Axis legend on main view ──────────────────────────────────────────
     drawAxisLegend(p);

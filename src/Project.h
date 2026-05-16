@@ -12,13 +12,26 @@ struct TrackerConfig {
 };
 
 struct CalibrationData {
-    QList<QPointF> imagePoints;   // pixel coords in original frame space
-    QList<QPointF> stagePoints;   // real XZ in meters
-    QList<double>  homography;    // 3x3 row-major, empty = not calibrated
-    bool isValid() const { return homography.size() == 9; }
+    QList<QPointF> imagePoints;          // pixel coords (floor)
+    QList<QPointF> stagePoints;          // real XZ in metres (floor)
+    QList<double>  homography;           // 3×3 row-major, 9 values
+    // 3D extension (optional — present when calibrated with two planes)
+    QList<QPointF> elevatedImagePoints;  // pixel coords of elevated markers
+    float          markerHeight = 0.0f;  // Y of elevated markers in metres
+    QList<double>  projectionMatrix;     // 3×4 row-major, 12 values
+
+    bool isValid()   const { return homography.size() == 9; }
+    bool is3DValid() const { return projectionMatrix.size() == 12 && markerHeight > 0.0f; }
 };
 
 enum class PsnMode { Multicast, Unicast, Broadcast };
+
+struct CalibrationViewSettings {
+    bool  showFloorGrid    = false;
+    float clickPlaneHeight = 0.0f;
+    bool  showClickPlane   = false;
+    float psnOutputHeight  = 0.0f;
+};
 
 struct NetworkConfig {
     PsnMode  psnMode         = PsnMode::Multicast;
@@ -31,10 +44,11 @@ struct NetworkConfig {
 };
 
 struct Project {
-    QString              ndiSource;
-    QList<TrackerConfig> trackers;
-    CalibrationData      calibration;
-    NetworkConfig        network;
+    QString                 ndiSource;
+    QList<TrackerConfig>    trackers;
+    CalibrationData         calibration;
+    CalibrationViewSettings calibrationView;
+    NetworkConfig           network;
     // Per-station tracker assignments: stationName -> list of assigned tracker IDs.
     // Populated by the host and persisted so rejoining stations get their last config.
     QMap<QString, QList<int>> stationTrackers;

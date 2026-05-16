@@ -24,9 +24,14 @@ public slots:
                             const QList<TrackerConfig>& trackers);
     void setOwnPositions(const QMap<int, QPair<float,float>>& positions,
                          const QList<TrackerConfig>& trackers);
+    void setOwnRawPositions(const QMap<int, QPair<float,float>>& rawPositions);
     void setActiveTracker(int id, const QColor& color);
     void setCalibrationMode(bool on);
     void setShowCalibrationOverlay(bool on);
+    void setShowFloorGrid(bool on);
+    void setClickPlaneHeight(float h);
+    void setShowClickPlane(bool on);
+    void setPsnOutputHeight(float h);
     // Session: which trackers the local user is assigned (empty = all at full opacity)
     void setAssignedTrackers(const QList<int>& ids, int unassignedAlpha = 80);
 
@@ -72,6 +77,9 @@ private:
                            bool isActive) const;
     void    drawCalibOverlay(QPainter& p) const;
     void    drawAxisLegend(QPainter& p) const;
+    void    drawFloorGrid(QPainter& p) const;
+    void    drawHeightGhosts(QPainter& p) const;
+    void    drawClickPlaneOverlay(QPainter& p) const;
     // Returns -1 (origin), >=0 (point index), or -2 (nothing nearby).
     int     nearestCalibPoint(QPointF widgetPos, double threshold = 15.0) const;
 
@@ -81,6 +89,7 @@ private:
     QMap<int, QVector3D>           remotePositions_;
     QList<TrackerConfig>           remoteTrackers_;
     QMap<int, QPair<float,float>>  ownPositions_;
+    QMap<int, QPair<float,float>>  ownRawPositions_;
     QList<TrackerConfig>           ownTrackers_;
 
     int     activeTrackerId_    = -1;
@@ -99,6 +108,11 @@ private:
 
     bool    ndiSourceConfigured_ = false;
     Calibration* calibration_ = nullptr;
+
+    bool  showFloorGrid_    = false;
+    float clickPlaneHeight_ = 0.0f;
+    bool  showClickPlane_   = false;
+    float psnOutputHeight_  = 0.0f;
 
     QList<QPointF> calibOverlayPoints_;
     int            calibOverlayHighlight_ = -1;
