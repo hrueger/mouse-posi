@@ -265,6 +265,21 @@ if(APPLE)
     target_include_directories(onpoint PRIVATE "${_decklink_macos_inc}")
     target_sources(onpoint PRIVATE "${_decklink_macos_inc}/DeckLinkAPIDispatch.cpp")
     target_compile_definitions(onpoint PRIVATE DECKLINK_AVAILABLE=1)
+
+    # CMake records the Homebrew OpenCV libdir as an LC_RPATH on the executable.
+    # At runtime dyld resolves @rpath/libopencv_*.413.dylib references (from the
+    # bundled Frameworks/ copies) against this Homebrew path, loading a second
+    # OpenCV/OpenBLAS/libomp stack alongside the bundled one.  Two OMP runtimes
+    # in the same process trigger abort() in __kmp_register_library_startup().
+    # Stripping the Homebrew rpath forces dyld to use @executable_path/../Frameworks
+    # exclusively, which is the only remaining valid rpath after bundling.
+    add_custom_command(TARGET onpoint POST_BUILD
+        COMMAND bash -c
+            "install_name_tool -delete_rpath /opt/homebrew/opt/opencv/lib \
+                '$<TARGET_FILE:onpoint>' 2>/dev/null; \
+             install_name_tool -delete_rpath /opt/homebrew/lib \
+                '$<TARGET_FILE:onpoint>' 2>/dev/null; true"
+        COMMENT "Remove Homebrew OpenCV rpaths from executable to prevent OMP double-load")
 endif()
 
 # ── Windows-specific ──────────────────────────────────────────────────────────
