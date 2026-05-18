@@ -25,6 +25,14 @@ jobs:
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref }}
 
+      - name: Cache Homebrew downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/Homebrew
+          key: brew-${{ runner.os }}-cmake-qt-opencv-v1
+          restore-keys: |
+            brew-${{ runner.os }}-
+
       - name: Install Homebrew dependencies
         run: brew install cmake qt opencv
 
