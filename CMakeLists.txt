@@ -273,12 +273,12 @@ if(APPLE)
     # in the same process trigger abort() in __kmp_register_library_startup().
     # Stripping the Homebrew rpath forces dyld to use @executable_path/../Frameworks
     # exclusively, which is the only remaining valid rpath after bundling.
+    # Two separate single-line commands so CMake's Makefile generator doesn't
+    # split the shell string at embedded newlines (which breaks 2>/dev/null).
+    # "; exit 0" makes each step succeed even when the rpath is absent.
     add_custom_command(TARGET onpoint POST_BUILD
-        COMMAND bash -c
-            "install_name_tool -delete_rpath /opt/homebrew/opt/opencv/lib \
-                '$<TARGET_FILE:onpoint>' 2>/dev/null; \
-             install_name_tool -delete_rpath /opt/homebrew/lib \
-                '$<TARGET_FILE:onpoint>' 2>/dev/null; true"
+        COMMAND sh -c "install_name_tool -delete_rpath /opt/homebrew/opt/opencv/lib '$<TARGET_FILE:onpoint>' 2>/dev/null; exit 0"
+        COMMAND sh -c "install_name_tool -delete_rpath /opt/homebrew/lib '$<TARGET_FILE:onpoint>' 2>/dev/null; exit 0"
         COMMENT "Remove Homebrew OpenCV rpaths from executable to prevent OMP double-load")
 endif()
 
