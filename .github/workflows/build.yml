@@ -73,6 +73,26 @@ jobs:
         run: |
           "$(brew --prefix qt)/bin/macdeployqt" build/onpoint.app
 
+      - name: Strip Homebrew rpaths from bundle
+        # macdeployqt bundles Homebrew OpenCV libs but leaves their original
+        # LC_RPATH entries intact.  At runtime dyld resolves @rpath/libopencv_*
+        # references against those paths and loads a second OpenCV/libomp stack
+        # alongside the bundled one, triggering an OMP abort().
+        # Strip every /opt/homebrew rpath from the executable and bundled libs.
+        run: |
+          exe="build/onpoint.app/Contents/MacOS/onpoint"
+          install_name_tool -delete_rpath /opt/homebrew/opt/opencv/lib "$exe" 2>/dev/null || true
+          install_name_tool -delete_rpath /opt/homebrew/lib "$exe" 2>/dev/null || true
+          for lib in build/onpoint.app/Contents/Frameworks/libopencv_*.dylib; do
+            [ -f "$lib" ] || continue
+            otool -l "$lib" \
+              | awk '/LC_RPATH/{ok=1} ok && /^ +path /{print $2; ok=0}' \
+              | grep '^/opt/homebrew/' \
+              | while IFS= read -r rpath; do
+                  install_name_tool -delete_rpath "$rpath" "$lib" 2>/dev/null || true
+                done
+          done
+
       - name: Sign
         # Skipped if APPLE_SIGNING_IDENTITY secret is not set.
         if: ${{ env.APPLE_SIGNING_IDENTITY != '' }}
