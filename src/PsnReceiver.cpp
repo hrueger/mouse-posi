@@ -1,6 +1,7 @@
 #include "PsnReceiver.h"
 #include <QUdpSocket>
 #include <QNetworkDatagram>
+#include <QNetworkInterface>
 #include <QtEndian>
 #include <cstring>
 
@@ -46,11 +47,13 @@ PsnReceiver::~PsnReceiver() {
     wait();
 }
 
-void PsnReceiver::startListening(const QString& multicastIp, quint16 port, bool multicast) {
-    multicastIp_ = multicastIp;
-    port_        = port;
-    multicast_   = multicast;
-    running_     = true;
+void PsnReceiver::startListening(const QString& multicastIp, quint16 port,
+                                  bool multicast, const QString& interfaceName) {
+    multicastIp_   = multicastIp;
+    port_          = port;
+    multicast_     = multicast;
+    interfaceName_ = interfaceName;
+    running_       = true;
     if (!isRunning()) start();
 }
 
@@ -65,10 +68,18 @@ QMap<int, QVector3D> PsnReceiver::remotePositions() {
 
 void PsnReceiver::run() {
     QUdpSocket socket;
+
+    QNetworkInterface iface;
+    if (!interfaceName_.isEmpty())
+        iface = QNetworkInterface::interfaceFromName(interfaceName_);
+
     socket.bind(QHostAddress::AnyIPv4, port_, QUdpSocket::ShareAddress | QUdpSocket::ReuseAddressHint);
 
     if (multicast_) {
-        socket.joinMulticastGroup(QHostAddress(multicastIp_));
+        if (iface.isValid())
+            socket.joinMulticastGroup(QHostAddress(multicastIp_), iface);
+        else
+            socket.joinMulticastGroup(QHostAddress(multicastIp_));
     }
 
     while (running_) {
@@ -137,6 +148,10 @@ void PsnReceiver::run() {
         }
     }
 
-    if (multicast_)
-        socket.leaveMulticastGroup(QHostAddress(multicastIp_));
+    if (multicast_) {
+        if (iface.isValid())
+            socket.leaveMulticastGroup(QHostAddress(multicastIp_), iface);
+        else
+            socket.leaveMulticastGroup(QHostAddress(multicastIp_));
+    }
 }

@@ -13,6 +13,8 @@ class SessionPanel : public QWidget {
 public:
     explicit SessionPanel(SessionManager* mgr, QWidget* parent = nullptr);
 
+    void setSessionInterface(const QString& iface) { sessionInterface_ = iface; }
+
 private slots:
     void onStateChanged(SessionManager::State state);
     void onBrowsedSessionsChanged(QList<DiscoveredSession> sessions);
@@ -24,6 +26,7 @@ private:
     void buildJoinView();
 
     SessionManager* mgr_;
+    QString         sessionInterface_;
 
     // Host controls
     QLineEdit*    sessionNameEdit_;

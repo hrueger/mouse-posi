@@ -4,6 +4,7 @@
 #include <QMap>
 #include <QVector3D>
 #include <QHostAddress>
+#include <QNetworkInterface>
 #include <atomic>
 
 class PsnReceiver : public QThread {
@@ -13,7 +14,8 @@ public:
     ~PsnReceiver() override;
 
     void startListening(const QString& multicastIp, quint16 port,
-                        bool multicast = true);
+                        bool multicast = true,
+                        const QString& interfaceName = {});
     void stop();
 
     // Thread-safe snapshot of all received tracker positions
@@ -30,6 +32,7 @@ private:
     QMutex               mutex_;
     QMap<int, QVector3D> positions_;
     QString              multicastIp_;
+    QString              interfaceName_;
     quint16              port_      = 56565;
     bool                 multicast_ = true;
     std::atomic_bool     running_{false};

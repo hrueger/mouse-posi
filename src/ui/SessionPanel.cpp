@@ -91,7 +91,7 @@ SessionPanel::SessionPanel(SessionManager* mgr, QWidget* parent)
         if (peer.isEmpty()) peer = "Station 1";
         QSettings s("onpoint", "onpoint");
         s.setValue("peerName", peer);
-        mgr_->startHosting(name, peer);
+        mgr_->startHosting(name, peer, sessionInterface_);
     });
     connect(stopBtn_, &QPushButton::clicked, mgr_, &SessionManager::stopHosting);
     connect(leaveBtn_, &QPushButton::clicked, mgr_, &SessionManager::leaveSession);

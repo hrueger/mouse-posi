@@ -127,11 +127,30 @@ void PsnSender::configure(const NetworkConfig& cfg) {
     psnMode_ = cfg.psnMode;
     port_    = cfg.port;
 
+    socket_.close();
+
+    // Determine bind address: use the interface's IPv4 address so outgoing packets
+    // leave on the correct NIC regardless of the OS routing table.
+    QHostAddress bindAddr = QHostAddress::AnyIPv4;
+    QNetworkInterface iface;
     if (!cfg.psnInterface.isEmpty()) {
-        const QNetworkInterface iface = QNetworkInterface::interfaceFromName(cfg.psnInterface);
-        if (iface.isValid())
-            socket_.setMulticastInterface(iface);
+        iface = QNetworkInterface::interfaceFromName(cfg.psnInterface);
+        if (iface.isValid()) {
+            for (const auto& entry : iface.addressEntries()) {
+                if (entry.ip().protocol() == QAbstractSocket::IPv4Protocol) {
+                    bindAddr = entry.ip();
+                    break;
+                }
+            }
+        }
     }
+
+    socket_.bind(bindAddr, 0);
+
+    // setMulticastInterface must be called after bind so the underlying socket
+    // option takes effect.
+    if (iface.isValid() && psnMode_ == PsnMode::Multicast)
+        socket_.setMulticastInterface(iface);
 
     switch (psnMode_) {
         case PsnMode::Multicast:

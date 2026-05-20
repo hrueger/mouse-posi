@@ -191,12 +191,14 @@ MainWindow::MainWindow(NdiReceiver* ndi, QWidget* parent) : QMainWindow(parent) 
     connect(networkPanel_, &NetworkSettingsPanel::configChanged,
             this, [this](const NetworkConfig& cfg) {
         project_.network = cfg;
+        sessionPanel_->setSessionInterface(cfg.sessionInterface);
         psnSender_->configure(cfg);
         if (kEnableIncomingPsn) {
             psnReceiver_->stop();
             psnReceiver_->wait();
             psnReceiver_->startListening(cfg.multicastIp, cfg.port,
-                                         cfg.psnMode == PsnMode::Multicast);
+                                         cfg.psnMode == PsnMode::Multicast,
+                                         cfg.psnInterface);
         } else {
             psnReceiver_->stop();
             psnReceiver_->wait();
@@ -608,13 +610,15 @@ void MainWindow::applyProject() {
     trackersPanel_->setTrackers(project_.trackers);
     trackerBar_->setTrackers(project_.trackers);
     networkPanel_->setConfig(project_.network);
+    sessionPanel_->setSessionInterface(project_.network.sessionInterface);
     psnSender_->configure(project_.network);
     if (kEnableIncomingPsn) {
         psnReceiver_->stop();
         psnReceiver_->wait();
         psnReceiver_->startListening(project_.network.multicastIp,
                                      project_.network.port,
-                                     project_.network.psnMode == PsnMode::Multicast);
+                                     project_.network.psnMode == PsnMode::Multicast,
+                                     project_.network.psnInterface);
     } else {
         psnReceiver_->stop();
         psnReceiver_->wait();
