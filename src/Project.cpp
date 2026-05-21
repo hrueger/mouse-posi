@@ -61,7 +61,12 @@ Project Project::load(const QString& path) {
     QJsonObject root = doc.object();
 
     Project p;
-    p.ndiSource = root["ndiSource"].toString();
+    p.videoSourceType       = root["videoSourceType"].toString();
+    p.ndiSource             = root["ndiSource"].toString();
+    p.decklinkDevice        = root["decklinkDevice"].toString();
+    p.decklinkConnection    = root["decklinkConnection"].toString();
+    p.decklinkAllow10Bit    = root["decklinkAllow10Bit"].toBool(true);
+    p.decklinkDisplayMode   = static_cast<quint32>(root["decklinkDisplayMode"].toInt(0));
 
     p.trackers.clear();
     for (const auto& tv : root["trackers"].toArray()) {
@@ -119,7 +124,12 @@ Project Project::load(const QString& path) {
 
 void Project::save(const QString& path) const {
     QJsonObject root;
-    root["ndiSource"] = ndiSource;
+    root["videoSourceType"]      = videoSourceType;
+    root["ndiSource"]            = ndiSource;
+    root["decklinkDevice"]       = decklinkDevice;
+    root["decklinkConnection"]   = decklinkConnection;
+    root["decklinkAllow10Bit"]   = decklinkAllow10Bit;
+    root["decklinkDisplayMode"]  = static_cast<int>(decklinkDisplayMode);
 
     QJsonArray trackerArr;
     for (const auto& t : trackers) {

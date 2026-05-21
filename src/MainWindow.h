@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #include <QMainWindow>
 #include <QTimer>
 #include <QLabel>
@@ -38,7 +39,8 @@ public:
     void loadProject(const Project& p);
     void setNdiSource(const QString& source);
     void setWebcamSource(const QString& device);
-    void setDecklinkSource(const QString& device);
+    void setDecklinkSource(const QString& deviceId, const QString& connection,
+                           uint32_t displayMode = 0, bool allow10Bit = true);
 
 protected:
     void closeEvent(QCloseEvent*) override;

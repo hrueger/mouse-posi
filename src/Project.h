@@ -44,7 +44,12 @@ struct NetworkConfig {
 };
 
 struct Project {
+    QString                 videoSourceType;     // "ndi" | "webcam" | "decklink" (empty = ndi)
     QString                 ndiSource;
+    QString                 decklinkDevice;      // persistent-ID hash (see DeckLinkCapture::DeviceInfo)
+    QString                 decklinkConnection;
+    bool                    decklinkAllow10Bit  = true;
+    quint32                 decklinkDisplayMode = 0;  // 0 = Auto (bmdModeUnknown)
     QList<TrackerConfig>    trackers;
     CalibrationData         calibration;
     CalibrationViewSettings calibrationView;

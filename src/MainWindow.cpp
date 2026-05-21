@@ -153,6 +153,12 @@ MainWindow::MainWindow(NdiReceiver* ndi, QWidget* parent) : QMainWindow(parent) 
             statusNdi_->setText("Webcam error: " + err);
     });
     connect(decklink_, &DeckLinkCapture::frameReady, this, &MainWindow::onDecklinkFrameReady);
+    connect(decklink_, &DeckLinkCapture::errorChanged, this, [this](const QString& err) {
+        if (videoSourceKind_ != VideoSourceKind::DeckLink)
+            return;
+        if (!err.isEmpty())
+            statusNdi_->setText("DeckLink: " + err);
+    });
 
     connect(trackerBar_, &TrackerBar::trackerSelected,
             this, [this](int id) { selectTracker(id); });
@@ -186,7 +192,10 @@ MainWindow::MainWindow(NdiReceiver* ndi, QWidget* parent) : QMainWindow(parent) 
 
     connect(streamPanel_, &StreamSourcePanel::ndiSourceSelected, this, &MainWindow::setNdiSource);
     connect(streamPanel_, &StreamSourcePanel::webcamSourceSelected, this, &MainWindow::setWebcamSource);
-    connect(streamPanel_, &StreamSourcePanel::decklinkSourceSelected, this, &MainWindow::setDecklinkSource);
+    connect(streamPanel_, &StreamSourcePanel::decklinkSourceSelected,
+            this, [this](const QString& id, const QString& conn, uint32_t mode, bool b10) {
+        setDecklinkSource(id, conn, mode, b10);
+    });
 
     connect(networkPanel_, &NetworkSettingsPanel::configChanged,
             this, [this](const NetworkConfig& cfg) {
@@ -546,7 +555,8 @@ void MainWindow::loadProject(const Project& p) {
 }
 
 void MainWindow::setNdiSource(const QString& source) {
-    project_.ndiSource = source;
+    project_.ndiSource     = source;
+    project_.videoSourceType = "ndi";
 
     videoSourceKind_ = VideoSourceKind::Ndi;
     videoSourceName_ = source;
@@ -564,6 +574,7 @@ void MainWindow::setWebcamSource(const QString& device) {
 #if WEBCAM_AVAILABLE
     videoSourceKind_ = VideoSourceKind::Webcam;
     videoSourceName_ = device;
+    project_.videoSourceType = "webcam";
 
     // Stop NDI decoding to reduce CPU/network usage when using the webcam.
     ndi_->disconnectFromSource();
@@ -582,23 +593,40 @@ void MainWindow::setWebcamSource(const QString& device) {
 #endif
 }
 
-void MainWindow::setDecklinkSource(const QString& device) {
+void MainWindow::setDecklinkSource(const QString& deviceId, const QString& connection,
+                                   uint32_t displayMode, bool allow10Bit) {
 #if defined(DECKLINK_AVAILABLE) && DECKLINK_AVAILABLE
-    videoSourceKind_ = VideoSourceKind::DeckLink;
-    videoSourceName_ = device;
+    videoSourceKind_              = VideoSourceKind::DeckLink;
+    videoSourceName_              = deviceId;
+    project_.videoSourceType      = "decklink";
+    project_.decklinkDevice       = deviceId;
+    project_.decklinkConnection   = connection;
+    project_.decklinkAllow10Bit   = allow10Bit;
+    project_.decklinkDisplayMode  = displayMode;
 
-    // Stop other sources to keep CPU/network use low.
     ndi_->disconnectFromSource();
     webcam_->stop();
 
-    decklink_->setDeviceName(device);
+    // Map connection name back to enum.
+    DeckLinkCapture::Connection conn = DeckLinkCapture::Connection::Unspecified;
+    for (auto c : {DeckLinkCapture::Connection::SDI, DeckLinkCapture::Connection::HDMI,
+                   DeckLinkCapture::Connection::OpticalSDI, DeckLinkCapture::Connection::Component,
+                   DeckLinkCapture::Connection::Composite, DeckLinkCapture::Connection::SVideo}) {
+        if (DeckLinkCapture::connectionName(c) == connection) { conn = c; break; }
+    }
+
+    decklink_->stop();
+    decklink_->setDeviceId(deviceId);
+    decklink_->setConnection(conn);
+    decklink_->setDisplayMode(displayMode);
+    decklink_->setAllow10Bit(allow10Bit);
     decklink_->start();
 
-    statusNdi_->setText(device.isEmpty() ? "No DeckLink device" : "DeckLink: " + device + " (starting…)");
-    video_->setNdiSourceConfigured(!device.isEmpty());
+    statusNdi_->setText(deviceId.isEmpty() ? "No DeckLink device" : "DeckLink: " + deviceId + " (starting…)");
+    video_->setNdiSourceConfigured(!deviceId.isEmpty());
     markDirty();
 #else
-    (void)device;
+    (void)deviceId; (void)connection; (void)displayMode; (void)allow10Bit;
     statusNdi_->setText("DeckLink support unavailable");
     video_->setNdiSourceConfigured(false);
 #endif
@@ -623,9 +651,18 @@ void MainWindow::applyProject() {
         psnReceiver_->stop();
         psnReceiver_->wait();
     }
-    video_->setNdiSourceConfigured(!project_.ndiSource.isEmpty());
-    if (!project_.ndiSource.isEmpty())
-        setNdiSource(project_.ndiSource);
+    if (project_.videoSourceType == "decklink" && !project_.decklinkDevice.isEmpty()) {
+        setDecklinkSource(project_.decklinkDevice, project_.decklinkConnection,
+                          project_.decklinkDisplayMode, project_.decklinkAllow10Bit);
+        streamPanel_->setCurrentDecklinkSource(project_.decklinkDevice,
+                                               project_.decklinkConnection,
+                                               project_.decklinkDisplayMode,
+                                               project_.decklinkAllow10Bit);
+    } else if (project_.videoSourceType != "webcam") {
+        video_->setNdiSourceConfigured(!project_.ndiSource.isEmpty());
+        if (!project_.ndiSource.isEmpty())
+            setNdiSource(project_.ndiSource);
+    }
     if (project_.calibration.isValid()) {
         calibration_.fromList(project_.calibration.homography);
         if (project_.calibration.is3DValid())
