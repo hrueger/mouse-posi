@@ -483,9 +483,15 @@ QList<DeckLinkCapture::DisplayModeInfo> DeckLinkCapture::listDisplayModes(const 
         IDeckLinkProfileAttributes* attrs = nullptr;
         if (dev->QueryInterface(IID_IDeckLinkProfileAttributes,
                                 reinterpret_cast<void**>(&attrs)) == S_OK && attrs) {
+#ifdef Q_OS_WIN
+            BOOL sup = FALSE;
+            if (attrs->GetFlag(BMDDeckLinkSupportsInputFormatDetection, &sup) == S_OK)
+                supportsFormatDetection = (sup != FALSE);
+#else
             bool sup = false;
             if (attrs->GetFlag(BMDDeckLinkSupportsInputFormatDetection, &sup) == S_OK)
                 supportsFormatDetection = sup;
+#endif
             attrs->Release();
         }
     }
@@ -548,7 +554,16 @@ void DeckLinkCapture::start() {
         return;
     }
 
+#ifdef Q_OS_WIN
+    {
+        IDeckLinkVideoConversion* conv = nullptr;
+        CoCreateInstance(CLSID_CDeckLinkVideoConversion, nullptr, CLSCTX_ALL,
+                         IID_IDeckLinkVideoConversion, reinterpret_cast<void**>(&conv));
+        converter_ = conv;
+    }
+#else
     converter_ = CreateVideoConversionInstance();
+#endif
     if (!converter_) {
         cleanupDeckLink();
         emit errorChanged(QStringLiteral("DeckLink: CreateVideoConversionInstance failed"));
@@ -588,9 +603,15 @@ void DeckLinkCapture::start() {
             IDeckLinkProfileAttributes* attrs = nullptr;
             if (deckLink_->QueryInterface(IID_IDeckLinkProfileAttributes,
                                           reinterpret_cast<void**>(&attrs)) == S_OK && attrs) {
+#ifdef Q_OS_WIN
+                BOOL sup = FALSE;
+                if (attrs->GetFlag(BMDDeckLinkSupportsInputFormatDetection, &sup) == S_OK)
+                    supportsFormatDetection = (sup != FALSE);
+#else
                 bool sup = false;
                 if (attrs->GetFlag(BMDDeckLinkSupportsInputFormatDetection, &sup) == S_OK)
                     supportsFormatDetection = sup;
+#endif
                 attrs->Release();
             }
         }
