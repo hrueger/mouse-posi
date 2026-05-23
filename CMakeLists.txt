@@ -44,6 +44,7 @@ set(SOURCES
     src/MainWindow.cpp
     src/VideoWidget.cpp
     src/NdiReceiver.cpp
+    src/MarshallCv370Controller.cpp
     src/WebcamCapture.cpp
     src/DeckLinkCapture.cpp
     src/PsnSender.cpp
@@ -68,6 +69,7 @@ set(HEADERS
     src/MainWindow.h
     src/VideoWidget.h
     src/NdiReceiver.h
+    src/MarshallCv370Controller.h
     src/WebcamCapture.h
     src/DeckLinkCapture.h
     src/PsnSender.h
@@ -173,6 +175,22 @@ target_link_libraries(onpoint PRIVATE
 )
 
 target_compile_definitions(onpoint PRIVATE WEBCAM_AVAILABLE=1)
+
+include(CTest)
+if(BUILD_TESTING)
+    find_package(Qt6 COMPONENTS Test QUIET)
+    if(TARGET Qt6::Test)
+        add_executable(onpoint_tests
+            tests/test_marshall_cv370_controller.cpp
+            src/MarshallCv370Controller.cpp
+        )
+        target_include_directories(onpoint_tests PRIVATE src)
+        target_link_libraries(onpoint_tests PRIVATE Qt6::Core Qt6::Network Qt6::Test)
+        add_test(NAME marshall_cv370_controller COMMAND onpoint_tests)
+    else()
+        message(WARNING "Qt6 Test component not found; skipping unit tests")
+    endif()
+endif()
 
 if(NDI_FOUND)
     target_include_directories(onpoint PRIVATE "${NDI_INCLUDE_DIR}")

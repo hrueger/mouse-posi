@@ -1,10 +1,12 @@
 #include "StreamSourcePanel.h"
 #include "../NdiReceiver.h"
+#include "../MarshallCv370Controller.h"
 #include <QTabWidget>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QComboBox>
 #include <QCheckBox>
+#include <QLineEdit>
 #include <QPushButton>
 #include <QLabel>
 #include <QTimer>
@@ -55,12 +57,59 @@ public:
         btnRow->addStretch();
         layout->addLayout(btnRow);
 
+        cv370Check_ = new QCheckBox("Marshall CV-370 camera");
+        cv370Check_->setToolTip("Show the day/night toggle for a Marshall CV-370 backing this NDI stream.");
+        layout->addWidget(cv370Check_);
+
+        auto* cv370HostRow = new QHBoxLayout;
+        cv370HostLabel_ = new QLabel("CV-370 host:");
+        cv370HostEdit_ = new QLineEdit;
+        cv370HostEdit_->setPlaceholderText("IP or hostname");
+        cv370HostRow->addWidget(cv370HostLabel_);
+        cv370HostRow->addWidget(cv370HostEdit_);
+        layout->addLayout(cv370HostRow);
+
+        cv370ToggleBtn_ = new QPushButton("Switch to Night Mode");
+        layout->addWidget(cv370ToggleBtn_);
+
+        cv370StatusLabel_ = new QLabel;
+        cv370StatusLabel_->setWordWrap(true);
+        cv370StatusLabel_->setStyleSheet("color: palette(placeholderText); font-size: 11px;");
+        layout->addWidget(cv370StatusLabel_);
+
         layout->addStretch();
+
+        cv370Controller_ = new MarshallCv370Controller(this);
+        updateCv370Controls();
 
         connect(refreshBtn_, &QPushButton::clicked, this, &NdiSourceTab::refreshSources);
         connect(combo_, &QComboBox::currentTextChanged, this, [this](const QString& text) {
             if (!settingSource_ && !text.isEmpty())
                 emit sourceActivated(text);
+        });
+        connect(cv370Check_, &QCheckBox::toggled, this, [this](bool) {
+            if (!settingCv370_) emit cv370ConfigChanged(cv370Check_->isChecked(), cv370HostEdit_->text(), cv370NightMode_);
+            updateCv370Controls();
+        });
+        connect(cv370HostEdit_, &QLineEdit::textChanged, this, [this](const QString&) {
+            if (!settingCv370_) emit cv370ConfigChanged(cv370Check_->isChecked(), cv370HostEdit_->text(), cv370NightMode_);
+            updateCv370Controls();
+        });
+        connect(cv370ToggleBtn_, &QPushButton::clicked, this, [this]() {
+            const bool nextNightMode = !cv370NightMode_;
+            cv370ToggleBtn_->setEnabled(false);
+            cv370StatusLabel_->setText(nextNightMode ? QStringLiteral("Switching CV-370 to night mode…")
+                                                     : QStringLiteral("Switching CV-370 to daylight mode…"));
+            cv370Controller_->setNightMode(cv370HostEdit_->text(), nextNightMode);
+        });
+        connect(cv370Controller_, &MarshallCv370Controller::requestFinished,
+                this, [this](bool ok, bool nightMode, const QString& message) {
+            if (ok) {
+                cv370NightMode_ = nightMode;
+                if (!settingCv370_) emit cv370ConfigChanged(cv370Check_->isChecked(), cv370HostEdit_->text(), cv370NightMode_);
+            }
+            cv370StatusLabel_->setText(message);
+            updateCv370Controls();
         });
 
         if (ndi_) {
@@ -113,10 +162,44 @@ public:
         settingSource_ = false;
     }
 
+    void setMarshallCv370Config(bool enabled, const QString& host, bool nightMode) {
+        settingCv370_ = true;
+        cv370Check_->setChecked(enabled);
+        cv370HostEdit_->setText(host);
+        cv370NightMode_ = nightMode;
+        settingCv370_ = false;
+        cv370StatusLabel_->setText(nightMode ? QStringLiteral("Current mode: night")
+                                             : QStringLiteral("Current mode: daylight"));
+        updateCv370Controls();
+    }
+
+signals:
+    void cv370ConfigChanged(bool enabled, const QString& host, bool nightMode);
+
 private:
+    void updateCv370Controls() {
+        const bool enabled = cv370Check_->isChecked();
+        const bool hasHost = !cv370HostEdit_->text().trimmed().isEmpty();
+        cv370HostLabel_->setVisible(enabled);
+        cv370HostEdit_->setVisible(enabled);
+        cv370ToggleBtn_->setVisible(enabled);
+        cv370StatusLabel_->setVisible(enabled);
+        cv370ToggleBtn_->setEnabled(enabled && hasHost);
+        cv370ToggleBtn_->setText(cv370NightMode_ ? QStringLiteral("Switch to Daylight Mode")
+                                                 : QStringLiteral("Switch to Night Mode"));
+    }
+
     NdiReceiver* ndi_;
     QComboBox*   combo_;
     QPushButton* refreshBtn_;
+    QCheckBox*   cv370Check_ = nullptr;
+    QLabel*      cv370HostLabel_ = nullptr;
+    QLineEdit*   cv370HostEdit_ = nullptr;
+    QPushButton* cv370ToggleBtn_ = nullptr;
+    QLabel*      cv370StatusLabel_ = nullptr;
+    MarshallCv370Controller* cv370Controller_ = nullptr;
+    bool         cv370NightMode_ = false;
+    bool         settingCv370_ = false;
     bool         settingSource_ = false;
 };
 
@@ -511,7 +594,6 @@ private:
     bool         settingSource_  = false;
 #else
     void    refreshSources() override {}
-    QString selectedSource() const override { return {}; }
     void    setCurrentSource(const QString&) override {}
 #endif
 };
@@ -538,6 +620,8 @@ StreamSourcePanel::StreamSourcePanel(NdiReceiver* ndi, QWidget* parent)
 
     connect(ndiTab_, &VideoSourceTab::sourceActivated,
             this,    &StreamSourcePanel::ndiSourceSelected);
+    connect(ndiTab_, &NdiSourceTab::cv370ConfigChanged,
+            this,    &StreamSourcePanel::marshallCv370ConfigChanged);
 
     connect(webcamTab_, &VideoSourceTab::sourceActivated,
             this,       &StreamSourcePanel::webcamSourceSelected);
@@ -575,6 +659,10 @@ QString StreamSourcePanel::selectedNdiSource() const {
 
 void StreamSourcePanel::setCurrentNdiSource(const QString& source) {
     ndiTab_->setCurrentSource(source);
+}
+
+void StreamSourcePanel::setMarshallCv370Config(bool enabled, const QString& host, bool nightMode) {
+    ndiTab_->setMarshallCv370Config(enabled, host, nightMode);
 }
 
 void StreamSourcePanel::setCurrentDecklinkSource(const QString& deviceId,

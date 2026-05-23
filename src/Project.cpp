@@ -63,6 +63,9 @@ Project Project::load(const QString& path) {
     Project p;
     p.videoSourceType       = root["videoSourceType"].toString();
     p.ndiSource             = root["ndiSource"].toString();
+    p.cv370Enabled          = root["cv370Enabled"].toBool(false);
+    p.cv370Host             = root["cv370Host"].toString();
+    p.cv370NightMode        = root["cv370NightMode"].toBool(false);
     p.decklinkDevice        = root["decklinkDevice"].toString();
     p.decklinkConnection    = root["decklinkConnection"].toString();
     p.decklinkAllow10Bit    = root["decklinkAllow10Bit"].toBool(true);
@@ -126,6 +129,9 @@ void Project::save(const QString& path) const {
     QJsonObject root;
     root["videoSourceType"]      = videoSourceType;
     root["ndiSource"]            = ndiSource;
+    root["cv370Enabled"]         = cv370Enabled;
+    root["cv370Host"]            = cv370Host;
+    root["cv370NightMode"]       = cv370NightMode;
     root["decklinkDevice"]       = decklinkDevice;
     root["decklinkConnection"]   = decklinkConnection;
     root["decklinkAllow10Bit"]   = decklinkAllow10Bit;

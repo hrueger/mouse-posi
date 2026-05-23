@@ -46,6 +46,9 @@ struct NetworkConfig {
 struct Project {
     QString                 videoSourceType;     // "ndi" | "webcam" | "decklink" (empty = ndi)
     QString                 ndiSource;
+    bool                    cv370Enabled = false;
+    QString                 cv370Host;
+    bool                    cv370NightMode = false;
     QString                 decklinkDevice;      // persistent-ID hash (see DeckLinkCapture::DeviceInfo)
     QString                 decklinkConnection;
     bool                    decklinkAllow10Bit  = true;
