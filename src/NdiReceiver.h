@@ -20,6 +20,7 @@ public:
 signals:
     void frameReady(QImage frame);
     void sourcesChanged(QStringList sources);
+    void sourceEndpointChanged(const QString& sourceName, const QString& urlAddress);
 
 protected:
     void run() override;

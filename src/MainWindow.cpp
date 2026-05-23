@@ -197,10 +197,8 @@ MainWindow::MainWindow(NdiReceiver* ndi, QWidget* parent) : QMainWindow(parent) 
         setDecklinkSource(id, conn, mode, b10);
     });
     connect(streamPanel_, &StreamSourcePanel::marshallCv370ConfigChanged,
-            this, [this](bool enabled, const QString& host, bool nightMode) {
-        project_.cv370Enabled = enabled;
-        project_.cv370Host = host;
-        project_.cv370NightMode = nightMode;
+            this, [this](const MarshallCv370Config& config) {
+        config.writeToProject(project_);
         markDirty();
     });
 
@@ -658,9 +656,7 @@ void MainWindow::applyProject() {
         psnReceiver_->stop();
         psnReceiver_->wait();
     }
-    streamPanel_->setMarshallCv370Config(project_.cv370Enabled,
-                                          project_.cv370Host,
-                                          project_.cv370NightMode);
+    streamPanel_->setMarshallCv370Config(MarshallCv370Config::fromProject(project_));
     if (project_.videoSourceType == "decklink" && !project_.decklinkDevice.isEmpty()) {
         setDecklinkSource(project_.decklinkDevice, project_.decklinkConnection,
                           project_.decklinkDisplayMode, project_.decklinkAllow10Bit);

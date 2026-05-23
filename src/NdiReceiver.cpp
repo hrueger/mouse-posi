@@ -1,5 +1,7 @@
 #include "NdiReceiver.h"
 #include <QElapsedTimer>
+#include <QList>
+#include <QPair>
 #include <QtConcurrent/QtConcurrent>
 
 #if NDI_AVAILABLE
@@ -29,10 +31,17 @@ void NdiReceiver::discoverSources() {
         uint32_t num = 0;
         const NDIlib_source_t* srcs = NDIlib_find_get_current_sources(finder, &num);
         QStringList names;
-        for (uint32_t i = 0; i < num; ++i)
-            names << QString::fromUtf8(srcs[i].p_ndi_name);
+        QList<QPair<QString, QString>> endpoints;
+        for (uint32_t i = 0; i < num; ++i) {
+            const QString name = QString::fromUtf8(srcs[i].p_ndi_name);
+            names << name;
+            if (srcs[i].p_url_address)
+                endpoints.append({name, QString::fromUtf8(srcs[i].p_url_address)});
+        }
         NDIlib_find_destroy(finder);
         emit sourcesChanged(names);
+        for (const auto& endpoint : endpoints)
+            emit sourceEndpointChanged(endpoint.first, endpoint.second);
     });
 #else
     emit sourcesChanged({"[No NDI SDK — demo mode]"});

@@ -8,6 +8,8 @@ private slots:
     void setNightModeBuildsDaylightRequest();
     void setNightModeBuildsNightRequest();
     void hostNormalizationAcceptsSchemeAndTrailingSlash();
+    void extractsHostFromNdiUrlAddress();
+    void buildsDetectionRequest();
 };
 
 void MarshallCv370ControllerTest::setNightModeBuildsDaylightRequest() {
@@ -29,6 +31,19 @@ void MarshallCv370ControllerTest::hostNormalizationAcceptsSchemeAndTrailingSlash
     const QUrl url = MarshallCv370Controller::buildSetIrCutUrl("http://cv370.local/", false);
 
     QCOMPARE(url.toString(), QStringLiteral("http://cv370.local/cgi-bin/web.fcgi?func=set%7B%22image%22:%7B%22ircut%22:1%7D%7D"));
+}
+
+void MarshallCv370ControllerTest::extractsHostFromNdiUrlAddress() {
+    QCOMPARE(MarshallCv370Controller::hostFromNdiUrlAddress("192.168.10.42:5961"),
+             QStringLiteral("192.168.10.42"));
+    QCOMPARE(MarshallCv370Controller::hostFromNdiUrlAddress("http://cv370.local:5961/path"),
+             QStringLiteral("cv370.local"));
+}
+
+void MarshallCv370ControllerTest::buildsDetectionRequest() {
+    const QUrl url = MarshallCv370Controller::buildDetectUrl("192.168.10.42:5961");
+
+    QCOMPARE(url.toString(), QStringLiteral("http://192.168.10.42/cgi-bin/web.fcgi?func=get%7B%22image%22:[%22ircut%22]%7D"));
 }
 
 QTEST_MAIN(MarshallCv370ControllerTest)

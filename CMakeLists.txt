@@ -185,7 +185,7 @@ if(BUILD_TESTING)
             src/MarshallCv370Controller.cpp
         )
         target_include_directories(onpoint_tests PRIVATE src)
-        target_link_libraries(onpoint_tests PRIVATE Qt6::Core Qt6::Network Qt6::Test)
+        target_link_libraries(onpoint_tests PRIVATE Qt6::Core Qt6::Network Qt6::Widgets Qt6::Test)
         add_test(NAME marshall_cv370_controller COMMAND onpoint_tests)
     else()
         message(WARNING "Qt6 Test component not found; skipping unit tests")
