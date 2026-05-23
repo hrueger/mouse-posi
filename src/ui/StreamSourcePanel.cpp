@@ -511,7 +511,6 @@ private:
     bool         settingSource_  = false;
 #else
     void    refreshSources() override {}
-    QString selectedSource() const override { return {}; }
     void    setCurrentSource(const QString&) override {}
 #endif
 };

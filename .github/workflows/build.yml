@@ -4,6 +4,8 @@ on:
   push:
     branches: ["**"]
     tags: ["v*"]
+  pull_request:
+    branches: ["**"]
   workflow_dispatch:
     inputs:
       tag:
@@ -266,10 +268,78 @@ jobs:
           if-no-files-found: error
 
   # ─────────────────────────────────────────────────────────────────────────────
+  build-linux:
+    name: Linux x64
+    runs-on: ubuntu-22.04
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref }}
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            cmake \
+            ninja-build \
+            curl \
+            file \
+            unzip \
+            libgl1-mesa-dev \
+            libxkbcommon-dev \
+            libxcb-cursor0 \
+            libxcb-cursor-dev \
+            libopencv-dev \
+            qt6-base-dev \
+            qt6-base-dev-tools \
+            qt6-multimedia-dev \
+            libqt6svg6-dev \
+            libavahi-compat-libdnssd-dev
+
+      - name: Install NDI SDK
+        env:
+          NDI_SDK_URL_LINUX: ${{ secrets.NDI_SDK_URL_LINUX }}
+        run: bash .github/scripts/install-ndi-linux.sh
+
+      - name: Configure
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$PWD/package/OnPoint-Linux-x86_64"
+
+      - name: Build
+        run: cmake --build build --parallel $(nproc)
+
+      - name: Package
+        run: |
+          mkdir -p package/OnPoint-Linux-x86_64/bin package/OnPoint-Linux-x86_64/lib package/OnPoint-Linux-x86_64/share/doc/onpoint
+          cp build/onpoint package/OnPoint-Linux-x86_64/bin/
+          cp -a ndi/lib/libndi.so* package/OnPoint-Linux-x86_64/lib/
+          cp README.md package/OnPoint-Linux-x86_64/share/doc/onpoint/ 2>/dev/null || true
+          {
+            echo '#!/usr/bin/env bash'
+            echo 'set -euo pipefail'
+            echo 'APPDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"'
+            echo 'export LD_LIBRARY_PATH="$APPDIR/lib:${LD_LIBRARY_PATH:-}"'
+            echo 'exec "$APPDIR/bin/onpoint" "$@"'
+          } > package/OnPoint-Linux-x86_64/run-onpoint.sh
+          chmod +x package/OnPoint-Linux-x86_64/run-onpoint.sh
+          tar -C package -czf OnPoint-Linux-x86_64.tar.gz OnPoint-Linux-x86_64
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: OnPoint-Linux-x86_64
+          path: OnPoint-Linux-x86_64.tar.gz
+          if-no-files-found: error
+
+  # ─────────────────────────────────────────────────────────────────────────────
   release:
     name: GitHub Release
     if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
-    needs: [build-macos, build-windows]
+    needs: [build-macos, build-windows, build-linux]
     runs-on: ubuntu-latest
     env:
       TAG_NAME: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
@@ -287,3 +357,4 @@ jobs:
           files: |
             OnPoint.dmg
             OnPoint-*-Setup.exe
+            OnPoint-Linux-x86_64.tar.gz
