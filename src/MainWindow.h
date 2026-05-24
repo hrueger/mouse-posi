@@ -24,6 +24,7 @@ class SidebarWidget;
 class TrackersPanel;
 class TrackerBar;
 class StreamSourcePanel;
+class CameraControlPanel;
 class NetworkSettingsPanel;
 class StatsPanel;
 class CalibrationPanel;
@@ -81,6 +82,7 @@ private:
     TrackersPanel*        trackersPanel_;
     TrackerBar*           trackerBar_;
     StreamSourcePanel*    streamPanel_;
+    CameraControlPanel*   cameraControlPanel_;
     NetworkSettingsPanel* networkPanel_;
     StatsPanel*           statsPanel_;
     CalibrationPanel*     calibrationPanel_;

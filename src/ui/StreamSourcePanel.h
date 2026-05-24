@@ -2,7 +2,6 @@
 #include <QWidget>
 #include <QString>
 #include <cstdint>
-#include "../CameraControl.h"
 
 class NdiReceiver;
 class QTabWidget;
@@ -17,7 +16,6 @@ public:
 
     QString selectedNdiSource() const;
     void    setCurrentNdiSource(const QString& source);
-    void    setCameraControlConfig(const CameraControlConfig& config);
     void    setCurrentDecklinkSource(const QString& deviceId, const QString& connection,
                                      uint32_t displayMode, bool allow10Bit);
 
@@ -26,7 +24,7 @@ signals:
     void webcamSourceSelected(const QString& device);
     void decklinkSourceSelected(const QString& deviceId, const QString& connection,
                                 uint32_t displayMode, bool allow10Bit);
-    void cameraControlConfigChanged(const CameraControlConfig& config);
+    void ndiSourceEndpointChanged(const QString& sourceName, const QString& urlAddress);
 
 private:
     QTabWidget*        tabs_;

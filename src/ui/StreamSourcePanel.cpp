@@ -1,6 +1,5 @@
 #include "StreamSourcePanel.h"
 #include "../NdiReceiver.h"
-#include "../CameraControl.h"
 #include <QTabWidget>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -12,6 +11,7 @@
 #include <QTimer>
 #include <QFrame>
 #include <QMap>
+#include <QSizePolicy>
 #include "../DeckLinkCapture.h"
 #if WEBCAM_AVAILABLE
 #  include <QMediaDevices>
@@ -47,8 +47,9 @@ public:
         layout->setSpacing(6);
 
         combo_ = new QComboBox;
-        combo_->setMinimumContentsLength(16);
+        combo_->setMinimumContentsLength(0);
         combo_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+        combo_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
         combo_->setPlaceholderText("No sources found");
         layout->addWidget(combo_);
 
@@ -58,21 +59,16 @@ public:
         btnRow->addStretch();
         layout->addLayout(btnRow);
 
-        cameraControl_ = new CameraControlPanel;
-        layout->addWidget(cameraControl_);
-
         layout->addStretch();
 
-        updateCameraControlSourceEndpoint();
+        emitCurrentSourceEndpoint();
 
         connect(refreshBtn_, &QPushButton::clicked, this, &NdiSourceTab::refreshSources);
         connect(combo_, &QComboBox::currentTextChanged, this, [this](const QString& text) {
-            updateCameraControlSourceEndpoint();
+            emitCurrentSourceEndpoint();
             if (!settingSource_ && !text.isEmpty())
                 emit sourceActivated(text);
         });
-        connect(cameraControl_, &CameraControlPanel::configChanged,
-                this, &NdiSourceTab::cameraControlConfigChanged);
 
         if (ndi_) {
             connect(ndi_, &NdiReceiver::sourcesChanged, this, [this](QStringList sources) {
@@ -98,13 +94,13 @@ public:
 
                 if (shouldActivate && !combo_->currentText().isEmpty())
                     emit sourceActivated(combo_->currentText());
-                updateCameraControlSourceEndpoint();
+                emitCurrentSourceEndpoint();
             });
             connect(ndi_, &NdiReceiver::sourceEndpointChanged,
                     this, [this](const QString& sourceName, const QString& urlAddress) {
                 sourceEndpoints_[sourceName] = urlAddress;
                 if (sourceName == combo_->currentText())
-                    updateCameraControlSourceEndpoint();
+                    emitCurrentSourceEndpoint();
             });
         }
 
@@ -129,28 +125,22 @@ public:
             combo_->setCurrentIndex(combo_->count() - 1);
         }
         settingSource_ = false;
-    }
-
-    void setCameraControlConfig(const CameraControlConfig& config) {
-        cameraControl_->setConfig(config);
+        emitCurrentSourceEndpoint();
     }
 
 
 signals:
-    void cameraControlConfigChanged(const CameraControlConfig& config);
+    void sourceEndpointChanged(const QString& sourceName, const QString& urlAddress);
 
 private:
-    void updateCameraControlSourceEndpoint() {
-        if (!cameraControl_)
-            return;
+    void emitCurrentSourceEndpoint() {
         const QString source = combo_->currentText();
-        cameraControl_->setNdiSourceEndpoint(source, sourceEndpoints_.value(source));
+        emit sourceEndpointChanged(source, sourceEndpoints_.value(source));
     }
 
     NdiReceiver* ndi_;
     QComboBox*   combo_;
     QPushButton* refreshBtn_;
-    CameraControlPanel* cameraControl_ = nullptr;
     QMap<QString, QString> sourceEndpoints_;
     bool         settingSource_ = false;
 };
@@ -166,8 +156,9 @@ public:
         layout->setSpacing(6);
 
         combo_ = new QComboBox;
-        combo_->setMinimumContentsLength(16);
+        combo_->setMinimumContentsLength(0);
         combo_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+        combo_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
         combo_->setPlaceholderText("No cameras found");
         layout->addWidget(combo_);
 
@@ -572,8 +563,8 @@ StreamSourcePanel::StreamSourcePanel(NdiReceiver* ndi, QWidget* parent)
 
     connect(ndiTab_, &VideoSourceTab::sourceActivated,
             this,    &StreamSourcePanel::ndiSourceSelected);
-    connect(ndiTab_, &NdiSourceTab::cameraControlConfigChanged,
-            this,    &StreamSourcePanel::cameraControlConfigChanged);
+    connect(ndiTab_, &NdiSourceTab::sourceEndpointChanged,
+            this,    &StreamSourcePanel::ndiSourceEndpointChanged);
 
     connect(webcamTab_, &VideoSourceTab::sourceActivated,
             this,       &StreamSourcePanel::webcamSourceSelected);
@@ -611,10 +602,6 @@ QString StreamSourcePanel::selectedNdiSource() const {
 
 void StreamSourcePanel::setCurrentNdiSource(const QString& source) {
     ndiTab_->setCurrentSource(source);
-}
-
-void StreamSourcePanel::setCameraControlConfig(const CameraControlConfig& config) {
-    ndiTab_->setCameraControlConfig(config);
 }
 
 void StreamSourcePanel::setCurrentDecklinkSource(const QString& deviceId,

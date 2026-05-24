@@ -10,6 +10,7 @@
 #include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QPushButton>
+#include <QSizePolicy>
 #include <QVBoxLayout>
 
 MarshallCv370Controller::MarshallCv370Controller(QObject* parent)
@@ -160,11 +161,13 @@ MarshallCv370Panel::MarshallCv370Panel(QWidget* parent) : CameraSettingsPanel(pa
     hostLabel_ = new QLabel(QStringLiteral("CV-370 host:"));
     hostEdit_ = new QLineEdit;
     hostEdit_->setPlaceholderText(QStringLiteral("IP or hostname"));
+    hostEdit_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
     hostRow->addWidget(hostLabel_);
-    hostRow->addWidget(hostEdit_);
+    hostRow->addWidget(hostEdit_, 1);
     layout->addLayout(hostRow);
 
     toggleBtn_ = new QPushButton(QStringLiteral("Switch to Night Mode"));
+    toggleBtn_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     layout->addWidget(toggleBtn_);
 
     statusLabel_ = new QLabel;

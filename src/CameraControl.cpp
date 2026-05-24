@@ -7,6 +7,7 @@
 #include <QHBoxLayout>
 #include <QJsonObject>
 #include <QLabel>
+#include <QSizePolicy>
 #include <QStackedWidget>
 #include <QVBoxLayout>
 
@@ -29,8 +30,11 @@ CameraControlPanel::CameraControlPanel(QWidget* parent) : QWidget(parent) {
     auto* typeRow = new QHBoxLayout;
     auto* typeLabel = new QLabel(QStringLiteral("Type:"));
     typeCombo_ = new QComboBox;
+    typeCombo_->setMinimumContentsLength(0);
+    typeCombo_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    typeCombo_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
     typeRow->addWidget(typeLabel);
-    typeRow->addWidget(typeCombo_);
+    typeRow->addWidget(typeCombo_, 1);
     layout->addLayout(typeRow);
 
     stack_ = new QStackedWidget;
