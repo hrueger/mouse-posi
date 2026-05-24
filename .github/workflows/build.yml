@@ -19,6 +19,8 @@ jobs:
   build-macos:
     name: macOS ARM
     runs-on: macos-14
+    env:
+      NDI_SDK_URL_MAC: ${{ secrets.NDI_SDK_URL_MAC }}
 
     steps:
       - uses: actions/checkout@v4
@@ -37,9 +39,14 @@ jobs:
         run: brew install cmake qt opencv
 
       - name: Install NDI SDK
+        if: env.NDI_SDK_URL_MAC != ''
         run: |
-          curl -L "${{ secrets.NDI_SDK_URL_MAC }}" -o ndi-sdk.pkg
+          curl -L "$NDI_SDK_URL_MAC" -o ndi-sdk.pkg
           sudo installer -pkg ndi-sdk.pkg -target /
+
+      - name: Skip macOS build without NDI SDK URL
+        if: env.NDI_SDK_URL_MAC == ''
+        run: echo "NDI_SDK_URL_MAC is not configured; skipping macOS packaging for this branch."
 
       - name: Import signing certificate
         # Requires secrets: APPLE_CERTIFICATE (base64 .p12), APPLE_CERTIFICATE_PASSWORD
@@ -61,19 +68,23 @@ jobs:
             -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
 
       - name: Configure
+        if: env.NDI_SDK_URL_MAC != ''
         run: |
           cmake -B build \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_PREFIX_PATH="$(brew --prefix qt);$(brew --prefix opencv)"
 
       - name: Build
+        if: env.NDI_SDK_URL_MAC != ''
         run: cmake --build build --parallel $(sysctl -n hw.logicalcpu)
 
       - name: Bundle
+        if: env.NDI_SDK_URL_MAC != ''
         run: |
           "$(brew --prefix qt)/bin/macdeployqt" build/onpoint.app
 
       - name: Strip Homebrew rpaths from bundle
+        if: env.NDI_SDK_URL_MAC != ''
         # macdeployqt bundles Homebrew OpenCV libs but leaves their original
         # LC_RPATH entries intact.  At runtime dyld resolves @rpath/libopencv_*
         # references against those paths and loads a second OpenCV/libomp stack
@@ -105,6 +116,7 @@ jobs:
             build/onpoint.app
 
       - name: Create DMG
+        if: env.NDI_SDK_URL_MAC != ''
         run: |
           mkdir -p dmg_staging
           cp -R build/onpoint.app dmg_staging/
@@ -136,6 +148,7 @@ jobs:
           xcrun stapler staple OnPoint.dmg
 
       - name: Upload artifact
+        if: env.NDI_SDK_URL_MAC != ''
         uses: actions/upload-artifact@v4
         with:
           name: OnPoint-macOS
@@ -146,6 +159,8 @@ jobs:
   build-windows:
     name: Windows x64
     runs-on: windows-2022
+    env:
+      NDI_SDK_URL_WIN: ${{ secrets.NDI_SDK_URL_WIN }}
 
     steps:
       - uses: actions/checkout@v4
@@ -181,11 +196,12 @@ jobs:
           key: vcpkg-opencv4-x64-windows-v2
 
       - name: Install NDI SDK
+        if: env.NDI_SDK_URL_WIN != ''
         # The NDI installer is Inno Setup (no /S flag); use innoextract to unpack
         # without a GUI, then point NDI_SDK_DIR at the extracted app/ directory.
         shell: pwsh
         run: |
-          $url = "${{ secrets.NDI_SDK_URL_WIN }}"
+          $url = $env:NDI_SDK_URL_WIN
           $installer = Join-Path $env:RUNNER_TEMP "ndi-sdk.exe"
           curl.exe -L --retry 3 --retry-delay 5 $url -o $installer
 
@@ -201,7 +217,12 @@ jobs:
           }
           "NDI_SDK_DIR=$appDir" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
 
+      - name: Skip Windows build without NDI SDK URL
+        if: env.NDI_SDK_URL_WIN == ''
+        run: echo "NDI_SDK_URL_WIN is not configured; skipping Windows packaging for this branch."
+
       - name: Set up Bonjour SDK
+        if: env.NDI_SDK_URL_WIN != ''
         # Installs Bonjour runtime, fetches dns_sd.h (Apache 2.0 from mDNSResponder),
         # and generates dnssd.lib from the installed DLL via dumpbin + lib.exe.
         shell: pwsh
@@ -236,6 +257,7 @@ jobs:
                  /out:"third_party\bonjour\Lib\x64\dnssd.lib"
 
       - name: Configure
+        if: env.NDI_SDK_URL_WIN != ''
         run: |
           cmake -S . -B build -A x64 `
             -DCMAKE_BUILD_TYPE=Release `
@@ -245,20 +267,24 @@ jobs:
             -DVCPKG_TARGET_TRIPLET=x64-windows
 
       - name: Build
+        if: env.NDI_SDK_URL_WIN != ''
         run: cmake --build build --config Release --parallel
 
       - name: Deploy Qt runtime
+        if: env.NDI_SDK_URL_WIN != ''
         run: |
           & "$env:QT_ROOT_DIR\bin\windeployqt.exe" --release --compiler-runtime "build\Release\onpoint.exe"
           Copy-Item "C:\Windows\System32\dnssd.dll" "build\Release\" -Force
           Copy-Item "C:\vcpkg\installed\x64-windows\bin\opencv_*.dll" "build\Release\" -Force
 
       - name: Create installer
+        if: env.NDI_SDK_URL_WIN != ''
         run: |
           $version = if ("${{ github.ref_name }}" -match '^v(.+)$') { $Matches[1] } else { "0.0.0" }
           makensis /DVERSION="$version" packaging\windows.nsi
 
       - name: Upload artifact
+        if: env.NDI_SDK_URL_WIN != ''
         uses: actions/upload-artifact@v4
         with:
           name: OnPoint-Windows
