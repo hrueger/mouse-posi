@@ -63,25 +63,11 @@ Project Project::load(const QString& path) {
     Project p;
     p.videoSourceType       = root["videoSourceType"].toString();
     p.ndiSource             = root["ndiSource"].toString();
-    const bool hasCameraControl = root.contains(QStringLiteral("cameraControl"));
-    if (hasCameraControl) {
+    if (root.contains(QStringLiteral("cameraControl"))) {
         QJsonObject cameraControl = root["cameraControl"].toObject();
         p.cameraControl.type = cameraControl["type"].toString(QStringLiteral("cv370"));
         p.cameraControl.enabled = cameraControl["enabled"].toBool(false);
         p.cameraControl.config = cameraControl["config"].toObject();
-    }
-
-    // Backward compatibility for PR-era showfiles with flat CV-370 keys.
-    if (!hasCameraControl &&
-        (root.contains(QStringLiteral("cv370Enabled")) ||
-         root.contains(QStringLiteral("cv370Host")) ||
-         root.contains(QStringLiteral("cv370NightMode")))) {
-        p.cameraControl.type = QStringLiteral("cv370");
-        p.cameraControl.enabled = root["cv370Enabled"].toBool(false);
-        QJsonObject cv370;
-        cv370[QStringLiteral("host")] = root["cv370Host"].toString();
-        cv370[QStringLiteral("nightMode")] = root["cv370NightMode"].toBool(false);
-        p.cameraControl.config[QStringLiteral("cv370")] = cv370;
     }
     p.decklinkDevice        = root["decklinkDevice"].toString();
     p.decklinkConnection    = root["decklinkConnection"].toString();
