@@ -2,7 +2,7 @@
 #include <QWidget>
 #include <QString>
 #include <cstdint>
-#include "../MarshallCv370Controller.h"
+#include "../CameraControl.h"
 
 class NdiReceiver;
 class QTabWidget;
@@ -17,7 +17,7 @@ public:
 
     QString selectedNdiSource() const;
     void    setCurrentNdiSource(const QString& source);
-    void    setMarshallCv370Config(const MarshallCv370Config& config);
+    void    setCameraControlConfig(const CameraControlConfig& config);
     void    setCurrentDecklinkSource(const QString& deviceId, const QString& connection,
                                      uint32_t displayMode, bool allow10Bit);
 
@@ -26,7 +26,7 @@ signals:
     void webcamSourceSelected(const QString& device);
     void decklinkSourceSelected(const QString& deviceId, const QString& connection,
                                 uint32_t displayMode, bool allow10Bit);
-    void marshallCv370ConfigChanged(const MarshallCv370Config& config);
+    void cameraControlConfigChanged(const CameraControlConfig& config);
 
 private:
     QTabWidget*        tabs_;

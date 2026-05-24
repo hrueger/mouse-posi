@@ -1,5 +1,10 @@
 #include <QtTest/QtTest>
+#include <QFile>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QTemporaryDir>
 #include "MarshallCv370Controller.h"
+#include "Project.h"
 
 class MarshallCv370ControllerTest : public QObject {
     Q_OBJECT
@@ -10,6 +15,8 @@ private slots:
     void hostNormalizationAcceptsSchemeAndTrailingSlash();
     void extractsHostFromNdiUrlAddress();
     void buildsDetectionRequest();
+    void projectSaveUsesCameraControlObject();
+    void projectLoadMigratesFlatCv370Keys();
 };
 
 void MarshallCv370ControllerTest::setNightModeBuildsDaylightRequest() {
@@ -44,6 +51,65 @@ void MarshallCv370ControllerTest::buildsDetectionRequest() {
     const QUrl url = MarshallCv370Controller::buildDetectUrl("192.168.10.42:5961");
 
     QCOMPARE(url.toString(), QStringLiteral("http://192.168.10.42/cgi-bin/web.fcgi?func=get%7B%22image%22:[%22ircut%22]%7D"));
+}
+
+void MarshallCv370ControllerTest::projectSaveUsesCameraControlObject() {
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString path = dir.filePath(QStringLiteral("show.onpoint"));
+
+    Project project = Project::defaultProject();
+    project.cameraControl.type = QStringLiteral("cv370");
+    project.cameraControl.enabled = true;
+    QJsonObject cv370;
+    cv370[QStringLiteral("host")] = QStringLiteral("192.168.10.42");
+    cv370[QStringLiteral("nightMode")] = true;
+    project.cameraControl.config[QStringLiteral("cv370")] = cv370;
+
+    project.save(path);
+
+    QFile file(path);
+    QVERIFY(file.open(QIODevice::ReadOnly));
+    const QJsonObject root = QJsonDocument::fromJson(file.readAll()).object();
+    QVERIFY(root.contains(QStringLiteral("cameraControl")));
+    QVERIFY(!root.contains(QStringLiteral("cv370Enabled")));
+
+    const QJsonObject cameraControl = root[QStringLiteral("cameraControl")].toObject();
+    QCOMPARE(cameraControl[QStringLiteral("type")].toString(), QStringLiteral("cv370"));
+    QCOMPARE(cameraControl[QStringLiteral("enabled")].toBool(), true);
+    QCOMPARE(cameraControl[QStringLiteral("config")].toObject()
+                 [QStringLiteral("cv370")].toObject()
+                 [QStringLiteral("host")].toString(),
+             QStringLiteral("192.168.10.42"));
+    QCOMPARE(cameraControl[QStringLiteral("config")].toObject()
+                 [QStringLiteral("cv370")].toObject()
+                 [QStringLiteral("nightMode")].toBool(),
+             true);
+}
+
+void MarshallCv370ControllerTest::projectLoadMigratesFlatCv370Keys() {
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString path = dir.filePath(QStringLiteral("legacy.onpoint"));
+
+    QJsonObject root;
+    root[QStringLiteral("cv370Enabled")] = true;
+    root[QStringLiteral("cv370Host")] = QStringLiteral("cv370.local");
+    root[QStringLiteral("cv370NightMode")] = true;
+    QFile file(path);
+    QVERIFY(file.open(QIODevice::WriteOnly));
+    file.write(QJsonDocument(root).toJson());
+    file.close();
+
+    const Project project = Project::load(path);
+    QCOMPARE(project.cameraControl.type, QStringLiteral("cv370"));
+    QCOMPARE(project.cameraControl.enabled, true);
+    QCOMPARE(project.cameraControl.config[QStringLiteral("cv370")].toObject()
+                 [QStringLiteral("host")].toString(),
+             QStringLiteral("cv370.local"));
+    QCOMPARE(project.cameraControl.config[QStringLiteral("cv370")].toObject()
+                 [QStringLiteral("nightMode")].toBool(),
+             true);
 }
 
 QTEST_MAIN(MarshallCv370ControllerTest)

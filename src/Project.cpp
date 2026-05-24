@@ -63,9 +63,26 @@ Project Project::load(const QString& path) {
     Project p;
     p.videoSourceType       = root["videoSourceType"].toString();
     p.ndiSource             = root["ndiSource"].toString();
-    p.cv370Enabled          = root["cv370Enabled"].toBool(false);
-    p.cv370Host             = root["cv370Host"].toString();
-    p.cv370NightMode        = root["cv370NightMode"].toBool(false);
+    const bool hasCameraControl = root.contains(QStringLiteral("cameraControl"));
+    if (hasCameraControl) {
+        QJsonObject cameraControl = root["cameraControl"].toObject();
+        p.cameraControl.type = cameraControl["type"].toString(QStringLiteral("cv370"));
+        p.cameraControl.enabled = cameraControl["enabled"].toBool(false);
+        p.cameraControl.config = cameraControl["config"].toObject();
+    }
+
+    // Backward compatibility for PR-era showfiles with flat CV-370 keys.
+    if (!hasCameraControl &&
+        (root.contains(QStringLiteral("cv370Enabled")) ||
+         root.contains(QStringLiteral("cv370Host")) ||
+         root.contains(QStringLiteral("cv370NightMode")))) {
+        p.cameraControl.type = QStringLiteral("cv370");
+        p.cameraControl.enabled = root["cv370Enabled"].toBool(false);
+        QJsonObject cv370;
+        cv370[QStringLiteral("host")] = root["cv370Host"].toString();
+        cv370[QStringLiteral("nightMode")] = root["cv370NightMode"].toBool(false);
+        p.cameraControl.config[QStringLiteral("cv370")] = cv370;
+    }
     p.decklinkDevice        = root["decklinkDevice"].toString();
     p.decklinkConnection    = root["decklinkConnection"].toString();
     p.decklinkAllow10Bit    = root["decklinkAllow10Bit"].toBool(true);
@@ -129,9 +146,11 @@ void Project::save(const QString& path) const {
     QJsonObject root;
     root["videoSourceType"]      = videoSourceType;
     root["ndiSource"]            = ndiSource;
-    root["cv370Enabled"]         = cv370Enabled;
-    root["cv370Host"]            = cv370Host;
-    root["cv370NightMode"]       = cv370NightMode;
+    QJsonObject cameraControlObject;
+    cameraControlObject["type"] = cameraControl.type;
+    cameraControlObject["enabled"] = cameraControl.enabled;
+    cameraControlObject["config"] = cameraControl.config;
+    root["cameraControl"] = cameraControlObject;
     root["decklinkDevice"]       = decklinkDevice;
     root["decklinkConnection"]   = decklinkConnection;
     root["decklinkAllow10Bit"]   = decklinkAllow10Bit;

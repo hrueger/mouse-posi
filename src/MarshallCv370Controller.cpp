@@ -1,6 +1,4 @@
 #include "MarshallCv370Controller.h"
-#include "Project.h"
-
 #include <QCheckBox>
 #include <QHBoxLayout>
 #include <QJsonDocument>
@@ -13,16 +11,6 @@
 #include <QNetworkRequest>
 #include <QPushButton>
 #include <QVBoxLayout>
-
-MarshallCv370Config MarshallCv370Config::fromProject(const Project& project) {
-    return {project.cv370Enabled, project.cv370Host, project.cv370NightMode};
-}
-
-void MarshallCv370Config::writeToProject(Project& project) const {
-    project.cv370Enabled = enabled;
-    project.cv370Host = host;
-    project.cv370NightMode = nightMode;
-}
 
 MarshallCv370Controller::MarshallCv370Controller(QObject* parent)
     : QObject(parent), network_(new QNetworkAccessManager(this))
@@ -155,15 +143,17 @@ void MarshallCv370Controller::setNightMode(const QString& host, bool nightMode) 
     });
 }
 
-MarshallCv370Panel::MarshallCv370Panel(QWidget* parent) : QWidget(parent) {
+MarshallCv370Panel::MarshallCv370Panel(QWidget* parent) : CameraSettingsPanel(parent) {
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 6, 0, 0);
     layout->setSpacing(6);
 
     cameraCheck_ = new QCheckBox(QStringLiteral("Marshall CV-370 camera"));
+    cameraCheck_->setChecked(true);
+    cameraCheck_->setVisible(false);
     cameraCheck_->setToolTip(QStringLiteral(
         "Automatically probes the selected NDI stream IP for Marshall CV-370 controls.\n"
-        "Enable manually if the camera is reachable at a different host."));
+        "Use the generic Camera control checkbox above to enable or disable camera control."));
     layout->addWidget(cameraCheck_);
 
     auto* hostRow = new QHBoxLayout;
@@ -228,16 +218,18 @@ MarshallCv370Panel::MarshallCv370Panel(QWidget* parent) : QWidget(parent) {
     });
 }
 
-MarshallCv370Config MarshallCv370Panel::config() const {
-    return {cameraCheck_->isChecked(), hostEdit_->text(), nightMode_};
+QJsonObject MarshallCv370Panel::configJson() const {
+    QJsonObject config;
+    config[QStringLiteral("host")] = hostEdit_->text();
+    config[QStringLiteral("nightMode")] = nightMode_;
+    return config;
 }
 
-void MarshallCv370Panel::setConfig(const MarshallCv370Config& config) {
+void MarshallCv370Panel::setConfigJson(const QJsonObject& config) {
     setting_ = true;
-    cameraCheck_->setChecked(config.enabled);
-    hostEdit_->setText(config.host);
-    nightMode_ = config.nightMode;
-    userEditedHost_ = !config.host.trimmed().isEmpty();
+    hostEdit_->setText(config[QStringLiteral("host")].toString());
+    nightMode_ = config[QStringLiteral("nightMode")].toBool(false);
+    userEditedHost_ = !hostEdit_->text().trimmed().isEmpty();
     setting_ = false;
     statusLabel_->setText(nightMode_ ? QStringLiteral("Current mode: night")
                                      : QStringLiteral("Current mode: daylight"));
@@ -268,17 +260,23 @@ void MarshallCv370Panel::setNdiSourceEndpoint(const QString& sourceName, const Q
 }
 
 void MarshallCv370Panel::emitConfigChanged() {
-    emit configChanged(config());
+    emit configChanged();
 }
 
 void MarshallCv370Panel::updateControls() {
-    const bool enabled = cameraCheck_->isChecked();
     const bool hasHost = !hostEdit_->text().trimmed().isEmpty();
-    hostLabel_->setVisible(enabled);
-    hostEdit_->setVisible(enabled);
-    toggleBtn_->setVisible(enabled);
-    statusLabel_->setVisible(enabled || !statusLabel_->text().isEmpty());
-    toggleBtn_->setEnabled(enabled && hasHost);
+    hostLabel_->setVisible(true);
+    hostEdit_->setVisible(true);
+    toggleBtn_->setVisible(true);
+    statusLabel_->setVisible(!statusLabel_->text().isEmpty());
+    toggleBtn_->setEnabled(hasHost);
     toggleBtn_->setText(nightMode_ ? QStringLiteral("Switch to Daylight Mode")
                                    : QStringLiteral("Switch to Night Mode"));
+}
+
+void registerMarshallCv370Camera(CameraControlPanel* cameraControl) {
+    cameraControl->registerCamera(
+        QStringLiteral("cv370"),
+        QStringLiteral("Marshall CV-370"),
+        [](QWidget* parent) { return new MarshallCv370Panel(parent); });
 }

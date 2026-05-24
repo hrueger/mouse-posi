@@ -1,26 +1,16 @@
 #pragma once
 
+#include "CameraControl.h"
+
 #include <QObject>
 #include <QString>
 #include <QUrl>
-#include <QWidget>
 
-class Project;
 class QLabel;
 class QCheckBox;
 class QLineEdit;
 class QNetworkAccessManager;
-class QNetworkReply;
 class QPushButton;
-
-struct MarshallCv370Config {
-    bool    enabled = false;
-    QString host;
-    bool    nightMode = false;
-
-    static MarshallCv370Config fromProject(const Project& project);
-    void writeToProject(Project& project) const;
-};
 
 class MarshallCv370Controller : public QObject {
     Q_OBJECT
@@ -43,17 +33,14 @@ private:
     QNetworkAccessManager* network_ = nullptr;
 };
 
-class MarshallCv370Panel : public QWidget {
+class MarshallCv370Panel : public CameraSettingsPanel {
     Q_OBJECT
 public:
     explicit MarshallCv370Panel(QWidget* parent = nullptr);
 
-    MarshallCv370Config config() const;
-    void setConfig(const MarshallCv370Config& config);
-    void setNdiSourceEndpoint(const QString& sourceName, const QString& ndiUrlAddress);
-
-signals:
-    void configChanged(const MarshallCv370Config& config);
+    QJsonObject configJson() const override;
+    void setConfigJson(const QJsonObject& config) override;
+    void setNdiSourceEndpoint(const QString& sourceName, const QString& ndiUrlAddress) override;
 
 private:
     void emitConfigChanged();
@@ -72,3 +59,5 @@ private:
     bool         setting_ = false;
     bool         userEditedHost_ = false;
 };
+
+void registerMarshallCv370Camera(CameraControlPanel* cameraControl);

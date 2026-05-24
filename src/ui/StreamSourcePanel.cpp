@@ -1,6 +1,6 @@
 #include "StreamSourcePanel.h"
 #include "../NdiReceiver.h"
-#include "../MarshallCv370Controller.h"
+#include "../CameraControl.h"
 #include <QTabWidget>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -58,21 +58,21 @@ public:
         btnRow->addStretch();
         layout->addLayout(btnRow);
 
-        marshallPanel_ = new MarshallCv370Panel;
-        layout->addWidget(marshallPanel_);
+        cameraControl_ = new CameraControlPanel;
+        layout->addWidget(cameraControl_);
 
         layout->addStretch();
 
-        updateMarshallSourceEndpoint();
+        updateCameraControlSourceEndpoint();
 
         connect(refreshBtn_, &QPushButton::clicked, this, &NdiSourceTab::refreshSources);
         connect(combo_, &QComboBox::currentTextChanged, this, [this](const QString& text) {
-            updateMarshallSourceEndpoint();
+            updateCameraControlSourceEndpoint();
             if (!settingSource_ && !text.isEmpty())
                 emit sourceActivated(text);
         });
-        connect(marshallPanel_, &MarshallCv370Panel::configChanged,
-                this, &NdiSourceTab::marshallCv370ConfigChanged);
+        connect(cameraControl_, &CameraControlPanel::configChanged,
+                this, &NdiSourceTab::cameraControlConfigChanged);
 
         if (ndi_) {
             connect(ndi_, &NdiReceiver::sourcesChanged, this, [this](QStringList sources) {
@@ -98,13 +98,13 @@ public:
 
                 if (shouldActivate && !combo_->currentText().isEmpty())
                     emit sourceActivated(combo_->currentText());
-                updateMarshallSourceEndpoint();
+                updateCameraControlSourceEndpoint();
             });
             connect(ndi_, &NdiReceiver::sourceEndpointChanged,
                     this, [this](const QString& sourceName, const QString& urlAddress) {
                 sourceEndpoints_[sourceName] = urlAddress;
                 if (sourceName == combo_->currentText())
-                    updateMarshallSourceEndpoint();
+                    updateCameraControlSourceEndpoint();
             });
         }
 
@@ -131,29 +131,26 @@ public:
         settingSource_ = false;
     }
 
-    void setMarshallCv370Config(const MarshallCv370Config& config) {
-        marshallPanel_->setConfig(config);
+    void setCameraControlConfig(const CameraControlConfig& config) {
+        cameraControl_->setConfig(config);
     }
 
-    MarshallCv370Config marshallCv370Config() const {
-        return marshallPanel_->config();
-    }
 
 signals:
-    void marshallCv370ConfigChanged(const MarshallCv370Config& config);
+    void cameraControlConfigChanged(const CameraControlConfig& config);
 
 private:
-    void updateMarshallSourceEndpoint() {
-        if (!marshallPanel_)
+    void updateCameraControlSourceEndpoint() {
+        if (!cameraControl_)
             return;
         const QString source = combo_->currentText();
-        marshallPanel_->setNdiSourceEndpoint(source, sourceEndpoints_.value(source));
+        cameraControl_->setNdiSourceEndpoint(source, sourceEndpoints_.value(source));
     }
 
     NdiReceiver* ndi_;
     QComboBox*   combo_;
     QPushButton* refreshBtn_;
-    MarshallCv370Panel* marshallPanel_ = nullptr;
+    CameraControlPanel* cameraControl_ = nullptr;
     QMap<QString, QString> sourceEndpoints_;
     bool         settingSource_ = false;
 };
@@ -575,8 +572,8 @@ StreamSourcePanel::StreamSourcePanel(NdiReceiver* ndi, QWidget* parent)
 
     connect(ndiTab_, &VideoSourceTab::sourceActivated,
             this,    &StreamSourcePanel::ndiSourceSelected);
-    connect(ndiTab_, &NdiSourceTab::marshallCv370ConfigChanged,
-            this,    &StreamSourcePanel::marshallCv370ConfigChanged);
+    connect(ndiTab_, &NdiSourceTab::cameraControlConfigChanged,
+            this,    &StreamSourcePanel::cameraControlConfigChanged);
 
     connect(webcamTab_, &VideoSourceTab::sourceActivated,
             this,       &StreamSourcePanel::webcamSourceSelected);
@@ -616,8 +613,8 @@ void StreamSourcePanel::setCurrentNdiSource(const QString& source) {
     ndiTab_->setCurrentSource(source);
 }
 
-void StreamSourcePanel::setMarshallCv370Config(const MarshallCv370Config& config) {
-    ndiTab_->setMarshallCv370Config(config);
+void StreamSourcePanel::setCameraControlConfig(const CameraControlConfig& config) {
+    ndiTab_->setCameraControlConfig(config);
 }
 
 void StreamSourcePanel::setCurrentDecklinkSource(const QString& deviceId,

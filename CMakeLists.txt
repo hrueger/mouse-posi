@@ -44,6 +44,7 @@ set(SOURCES
     src/MainWindow.cpp
     src/VideoWidget.cpp
     src/NdiReceiver.cpp
+    src/CameraControl.cpp
     src/MarshallCv370Controller.cpp
     src/WebcamCapture.cpp
     src/DeckLinkCapture.cpp
@@ -69,6 +70,7 @@ set(HEADERS
     src/MainWindow.h
     src/VideoWidget.h
     src/NdiReceiver.h
+    src/CameraControl.h
     src/MarshallCv370Controller.h
     src/WebcamCapture.h
     src/DeckLinkCapture.h
@@ -182,7 +184,9 @@ if(BUILD_TESTING)
     if(TARGET Qt6::Test)
         add_executable(onpoint_tests
             tests/test_marshall_cv370_controller.cpp
+            src/CameraControl.cpp
             src/MarshallCv370Controller.cpp
+            src/Project.cpp
         )
         target_include_directories(onpoint_tests PRIVATE src)
         target_link_libraries(onpoint_tests PRIVATE Qt6::Core Qt6::Network Qt6::Widgets Qt6::Test)
