@@ -3,7 +3,11 @@
 
 #if defined(DNSSD_AVAILABLE) && DNSSD_AVAILABLE
 
-#include <winsock2.h>
+#ifdef _WIN32
+#  include <winsock2.h>
+#else
+#  include <arpa/inet.h>
+#endif
 #include <dns_sd.h>
 #include <QSocketNotifier>
 #include <vector>
@@ -201,8 +205,8 @@ DnsSdBridge::~DnsSdBridge() {}
 void DnsSdBridge::advertise(const QString&, quint16) {
     QTimer::singleShot(0, this, [this]() {
         emit advertiseError(
-            QStringLiteral("Session discovery unavailable: "
-                           "install Apple Bonjour for Windows"));
+            QStringLiteral("Session discovery unavailable: install a DNS-SD compatibility library "
+                           "(Bonjour on Windows or Avahi libdns_sd on Linux)"));
     });
 }
 void DnsSdBridge::stopAdvertising() {}
