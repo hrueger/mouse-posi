@@ -6,6 +6,7 @@
 class NdiReceiver;
 class QTabWidget;
 class VideoSourceTab;
+class NdiSourceTab;
 class DecklinkSourceTab;
 
 class StreamSourcePanel : public QWidget {
@@ -23,10 +24,11 @@ signals:
     void webcamSourceSelected(const QString& device);
     void decklinkSourceSelected(const QString& deviceId, const QString& connection,
                                 uint32_t displayMode, bool allow10Bit);
+    void ndiSourceEndpointChanged(const QString& sourceName, const QString& urlAddress);
 
 private:
     QTabWidget*        tabs_;
-    VideoSourceTab*    ndiTab_;
+    NdiSourceTab*      ndiTab_;
     VideoSourceTab*    webcamTab_;
     DecklinkSourceTab* decklinkTab_;
 };

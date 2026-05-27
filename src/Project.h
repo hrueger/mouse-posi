@@ -4,6 +4,7 @@
 #include <QList>
 #include <QMap>
 #include <QPointF>
+#include <QJsonObject>
 
 struct TrackerConfig {
     int     id    = 1;
@@ -43,9 +44,16 @@ struct NetworkConfig {
     QString  sessionInterface;  // NIC name for DNS-SD + TCP session (empty = OS default)
 };
 
+struct CameraControlConfig {
+    QString     type = QStringLiteral("cv370");
+    bool        enabled = false;
+    QJsonObject config;
+};
+
 struct Project {
     QString                 videoSourceType;     // "ndi" | "webcam" | "decklink" (empty = ndi)
     QString                 ndiSource;
+    CameraControlConfig     cameraControl;
     QString                 decklinkDevice;      // persistent-ID hash (see DeckLinkCapture::DeviceInfo)
     QString                 decklinkConnection;
     bool                    decklinkAllow10Bit  = true;

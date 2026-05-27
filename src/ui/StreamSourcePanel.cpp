@@ -5,10 +5,13 @@
 #include <QHBoxLayout>
 #include <QComboBox>
 #include <QCheckBox>
+#include <QLineEdit>
 #include <QPushButton>
 #include <QLabel>
 #include <QTimer>
 #include <QFrame>
+#include <QMap>
+#include <QSizePolicy>
 #include "../DeckLinkCapture.h"
 #if WEBCAM_AVAILABLE
 #  include <QMediaDevices>
@@ -44,8 +47,9 @@ public:
         layout->setSpacing(6);
 
         combo_ = new QComboBox;
-        combo_->setMinimumContentsLength(16);
+        combo_->setMinimumContentsLength(0);
         combo_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+        combo_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
         combo_->setPlaceholderText("No sources found");
         layout->addWidget(combo_);
 
@@ -57,8 +61,11 @@ public:
 
         layout->addStretch();
 
+        emitCurrentSourceEndpoint();
+
         connect(refreshBtn_, &QPushButton::clicked, this, &NdiSourceTab::refreshSources);
         connect(combo_, &QComboBox::currentTextChanged, this, [this](const QString& text) {
+            emitCurrentSourceEndpoint();
             if (!settingSource_ && !text.isEmpty())
                 emit sourceActivated(text);
         });
@@ -87,6 +94,13 @@ public:
 
                 if (shouldActivate && !combo_->currentText().isEmpty())
                     emit sourceActivated(combo_->currentText());
+                emitCurrentSourceEndpoint();
+            });
+            connect(ndi_, &NdiReceiver::sourceEndpointChanged,
+                    this, [this](const QString& sourceName, const QString& urlAddress) {
+                sourceEndpoints_[sourceName] = urlAddress;
+                if (sourceName == combo_->currentText())
+                    emitCurrentSourceEndpoint();
             });
         }
 
@@ -111,12 +125,23 @@ public:
             combo_->setCurrentIndex(combo_->count() - 1);
         }
         settingSource_ = false;
+        emitCurrentSourceEndpoint();
     }
 
+
+signals:
+    void sourceEndpointChanged(const QString& sourceName, const QString& urlAddress);
+
 private:
+    void emitCurrentSourceEndpoint() {
+        const QString source = combo_->currentText();
+        emit sourceEndpointChanged(source, sourceEndpoints_.value(source));
+    }
+
     NdiReceiver* ndi_;
     QComboBox*   combo_;
     QPushButton* refreshBtn_;
+    QMap<QString, QString> sourceEndpoints_;
     bool         settingSource_ = false;
 };
 
@@ -131,8 +156,9 @@ public:
         layout->setSpacing(6);
 
         combo_ = new QComboBox;
-        combo_->setMinimumContentsLength(16);
+        combo_->setMinimumContentsLength(0);
         combo_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+        combo_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
         combo_->setPlaceholderText("No cameras found");
         layout->addWidget(combo_);
 
@@ -511,7 +537,6 @@ private:
     bool         settingSource_  = false;
 #else
     void    refreshSources() override {}
-    QString selectedSource() const override { return {}; }
     void    setCurrentSource(const QString&) override {}
 #endif
 };
@@ -538,6 +563,8 @@ StreamSourcePanel::StreamSourcePanel(NdiReceiver* ndi, QWidget* parent)
 
     connect(ndiTab_, &VideoSourceTab::sourceActivated,
             this,    &StreamSourcePanel::ndiSourceSelected);
+    connect(ndiTab_, &NdiSourceTab::sourceEndpointChanged,
+            this,    &StreamSourcePanel::ndiSourceEndpointChanged);
 
     connect(webcamTab_, &VideoSourceTab::sourceActivated,
             this,       &StreamSourcePanel::webcamSourceSelected);

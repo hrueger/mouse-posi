@@ -12,6 +12,7 @@
 #include "ui/TrackersPanel.h"
 #include "ui/TrackerBar.h"
 #include "ui/StreamSourcePanel.h"
+#include "CameraControl.h"
 #include "ui/NetworkSettingsPanel.h"
 #include "ui/StatsPanel.h"
 #include "ui/CalibrationPanel.h"
@@ -85,6 +86,7 @@ MainWindow::MainWindow(NdiReceiver* ndi, QWidget* parent) : QMainWindow(parent) 
 
     sessionPanel_    = new SessionPanel(sessionMgr_);
     streamPanel_     = new StreamSourcePanel(ndi_);
+    cameraControlPanel_ = new CameraControlPanel;
     calibrationPanel_= new CalibrationPanel(video_, ndi_, this);
     trackersPanel_   = new TrackersPanel;
     networkPanel_    = new NetworkSettingsPanel;
@@ -92,6 +94,7 @@ MainWindow::MainWindow(NdiReceiver* ndi, QWidget* parent) : QMainWindow(parent) 
 
     sidebar_->addPanel("Session",         sessionPanel_,     false);
     sidebar_->addPanel("Stream Source",   streamPanel_,      true);
+    sidebar_->addPanel("Camera Control",  cameraControlPanel_, false);
     calibrationSection_ = sidebar_->addPanel("Calibration", calibrationPanel_, false);
     sidebar_->addPanel("Trackers",        trackersPanel_,    true);
     sidebar_->addPanel("Network",         networkPanel_,     false);
@@ -195,6 +198,13 @@ MainWindow::MainWindow(NdiReceiver* ndi, QWidget* parent) : QMainWindow(parent) 
     connect(streamPanel_, &StreamSourcePanel::decklinkSourceSelected,
             this, [this](const QString& id, const QString& conn, uint32_t mode, bool b10) {
         setDecklinkSource(id, conn, mode, b10);
+    });
+    connect(streamPanel_, &StreamSourcePanel::ndiSourceEndpointChanged,
+            cameraControlPanel_, &CameraControlPanel::setNdiSourceEndpoint);
+    connect(cameraControlPanel_, &CameraControlPanel::configChanged,
+            this, [this](const CameraControlConfig& config) {
+        project_.cameraControl = config;
+        markDirty();
     });
 
     connect(networkPanel_, &NetworkSettingsPanel::configChanged,
@@ -651,6 +661,7 @@ void MainWindow::applyProject() {
         psnReceiver_->stop();
         psnReceiver_->wait();
     }
+    cameraControlPanel_->setConfig(project_.cameraControl);
     if (project_.videoSourceType == "decklink" && !project_.decklinkDevice.isEmpty()) {
         setDecklinkSource(project_.decklinkDevice, project_.decklinkConnection,
                           project_.decklinkDisplayMode, project_.decklinkAllow10Bit);

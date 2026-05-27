@@ -63,6 +63,12 @@ Project Project::load(const QString& path) {
     Project p;
     p.videoSourceType       = root["videoSourceType"].toString();
     p.ndiSource             = root["ndiSource"].toString();
+    if (root.contains(QStringLiteral("cameraControl"))) {
+        QJsonObject cameraControl = root["cameraControl"].toObject();
+        p.cameraControl.type = cameraControl["type"].toString(QStringLiteral("cv370"));
+        p.cameraControl.enabled = cameraControl["enabled"].toBool(false);
+        p.cameraControl.config = cameraControl["config"].toObject();
+    }
     p.decklinkDevice        = root["decklinkDevice"].toString();
     p.decklinkConnection    = root["decklinkConnection"].toString();
     p.decklinkAllow10Bit    = root["decklinkAllow10Bit"].toBool(true);
@@ -126,6 +132,11 @@ void Project::save(const QString& path) const {
     QJsonObject root;
     root["videoSourceType"]      = videoSourceType;
     root["ndiSource"]            = ndiSource;
+    QJsonObject cameraControlObject;
+    cameraControlObject["type"] = cameraControl.type;
+    cameraControlObject["enabled"] = cameraControl.enabled;
+    cameraControlObject["config"] = cameraControl.config;
+    root["cameraControl"] = cameraControlObject;
     root["decklinkDevice"]       = decklinkDevice;
     root["decklinkConnection"]   = decklinkConnection;
     root["decklinkAllow10Bit"]   = decklinkAllow10Bit;
