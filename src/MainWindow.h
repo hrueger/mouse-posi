@@ -1,10 +1,12 @@
 #pragma once
 #include <cstdint>
 #include <QMainWindow>
+#include <QDockWidget>
 #include <QTimer>
 #include <QLabel>
 #include <QPushButton>
 #include <QMap>
+#include <QList>
 #include <QElapsedTimer>
 #include <QFile>
 #include <QTextStream>
@@ -22,7 +24,6 @@ class PsnSender;
 class PsnReceiver;
 class SacnReceiver;
 class SessionManager;
-class SidebarWidget;
 class TrackersPanel;
 class TrackerBar;
 class StreamSourcePanel;
@@ -30,7 +31,6 @@ class NetworkSettingsPanel;
 class StatsPanel;
 class CalibrationPanel;
 class SessionPanel;
-class CollapsibleSection;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -80,7 +80,6 @@ private:
     void applyPlaneHeight(float h);
 
     VideoWidget*          video_;
-    SidebarWidget*        sidebar_;
     TrackersPanel*        trackersPanel_;
     TrackerBar*           trackerBar_;
     StreamSourcePanel*    streamPanel_;
@@ -88,7 +87,15 @@ private:
     StatsPanel*           statsPanel_;
     CalibrationPanel*     calibrationPanel_;
     SessionPanel*         sessionPanel_;
-    CollapsibleSection*   calibrationSection_ = nullptr;
+
+    QDockWidget* videoDock_;
+    QDockWidget* sessionDock_;
+    QDockWidget* streamDock_;
+    QDockWidget* calibrationDock_;
+    QDockWidget* trackersDock_;
+    QDockWidget* networkDock_;
+    QDockWidget* statsDock_;
+    QList<QDockWidget*> panelDocks_;
 
     NdiReceiver*  ndi_;
     WebcamCapture* webcam_;

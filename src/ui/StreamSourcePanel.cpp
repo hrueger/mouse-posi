@@ -1,585 +1,405 @@
 #include "StreamSourcePanel.h"
 #include "../NdiReceiver.h"
-#include <QTabWidget>
+#include "../DeckLinkCapture.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QComboBox>
 #include <QCheckBox>
 #include <QPushButton>
 #include <QLabel>
+#include <QStackedWidget>
+#include <QStandardItemModel>
 #include <QTimer>
-#include <QFrame>
-#include "../DeckLinkCapture.h"
+#include <QApplication>
+#include <QPalette>
 #if WEBCAM_AVAILABLE
 #  include <QMediaDevices>
 #  include <QCameraDevice>
 #endif
 
-// ── Abstract base for all source tabs ────────────────────────────────────────
+static constexpr int TypeRole = Qt::UserRole;
+static constexpr int IdRole   = Qt::UserRole + 1;
 
-class VideoSourceTab : public QWidget {
-    Q_OBJECT
-public:
-    explicit VideoSourceTab(QWidget* parent = nullptr) : QWidget(parent) {}
-    ~VideoSourceTab() override = default;
+StreamSourcePanel::StreamSourcePanel(NdiReceiver* ndi, QWidget* parent)
+    : QWidget(parent), ndi_(ndi)
+{
+    auto* layout = new QVBoxLayout(this);
+    layout->setContentsMargins(6, 4, 6, 6);
+    layout->setSpacing(6);
 
-    virtual void    refreshSources() = 0;
-    virtual QString selectedSource() const = 0;
-    virtual void    setCurrentSource(const QString& name) = 0;
+    masterCombo_ = new QComboBox;
+    masterCombo_->setMinimumContentsLength(16);
+    masterCombo_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    comboModel_ = new QStandardItemModel(this);
+    masterCombo_->setModel(comboModel_);
+    layout->addWidget(masterCombo_);
 
-signals:
-    void sourceActivated(const QString& source);
-};
+    propsStack_ = new QStackedWidget;
+    propsStack_->setVisible(false);
+    layout->addWidget(propsStack_);
+    layout->addStretch();
 
-// ── NDI tab ───────────────────────────────────────────────────────────────────
-
-class NdiSourceTab : public VideoSourceTab {
-    Q_OBJECT
-public:
-    explicit NdiSourceTab(NdiReceiver* ndi, QWidget* parent = nullptr)
-        : VideoSourceTab(parent), ndi_(ndi)
+    // ── NDI properties page (stack index 0) ──────────────────────────────
     {
-        auto* layout = new QVBoxLayout(this);
-        layout->setContentsMargins(0, 0, 0, 0);
-        layout->setSpacing(6);
-
-        combo_ = new QComboBox;
-        combo_->setMinimumContentsLength(16);
-        combo_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
-        combo_->setPlaceholderText("No sources found");
-        layout->addWidget(combo_);
-
-        auto* btnRow = new QHBoxLayout;
-        refreshBtn_ = new QPushButton("Refresh");
-        btnRow->addWidget(refreshBtn_);
-        btnRow->addStretch();
-        layout->addLayout(btnRow);
-
-        layout->addStretch();
-
-        connect(refreshBtn_, &QPushButton::clicked, this, &NdiSourceTab::refreshSources);
-        connect(combo_, &QComboBox::currentTextChanged, this, [this](const QString& text) {
-            if (!settingSource_ && !text.isEmpty())
-                emit sourceActivated(text);
-        });
-
-        if (ndi_) {
-            connect(ndi_, &NdiReceiver::sourcesChanged, this, [this](QStringList sources) {
-                settingSource_ = true;
-
-                const QString previous = combo_->currentText();
-                combo_->clear();
-                combo_->addItems(sources);
-
-                int nextIndex = -1;
-                if (!previous.isEmpty())
-                    nextIndex = combo_->findText(previous);
-                if (nextIndex < 0 && combo_->count() > 0)
-                    nextIndex = 0;
-
-                bool shouldActivate = false;
-                if (nextIndex >= 0) {
-                    combo_->setCurrentIndex(nextIndex);
-                    shouldActivate = (previous.isEmpty() || combo_->currentText() != previous);
-                }
-
-                settingSource_ = false;
-
-                if (shouldActivate && !combo_->currentText().isEmpty())
-                    emit sourceActivated(combo_->currentText());
-            });
-        }
-
-        QTimer::singleShot(0, this, [this]() { refreshSources(); });
+        auto* page = new QWidget;
+        auto* pl   = new QVBoxLayout(page);
+        pl->setContentsMargins(0, 4, 0, 0);
+        pl->setSpacing(4);
+        ndiRefreshBtn_ = new QPushButton("Refresh NDI sources");
+        pl->addWidget(ndiRefreshBtn_);
+        pl->addStretch();
+        propsStack_->addWidget(page);
     }
 
-    void refreshSources() override {
-        if (ndi_) ndi_->discoverSources();
-    }
+    // ── DeckLink properties page (stack index 1) ─────────────────────────
+    {
+        auto* page = new QWidget;
+        auto* pl   = new QVBoxLayout(page);
+        pl->setContentsMargins(0, 4, 0, 0);
+        pl->setSpacing(4);
 
-    QString selectedSource() const override {
-        return combo_->currentText();
-    }
+        dlWarning_ = new QLabel;
+        dlWarning_->setWordWrap(true);
+        dlWarning_->setVisible(false);
+        dlWarning_->setStyleSheet(
+            "color: #cc9900; font-size: 11px;"
+            "padding: 8px 10px; border: 1px solid palette(mid); border-radius: 4px;");
+        pl->addWidget(dlWarning_);
 
-    void setCurrentSource(const QString& name) override {
-        settingSource_ = true;
-        const int idx = combo_->findText(name);
-        if (idx >= 0) {
-            combo_->setCurrentIndex(idx);
-        } else if (!name.isEmpty()) {
-            combo_->addItem(name);
-            combo_->setCurrentIndex(combo_->count() - 1);
-        }
-        settingSource_ = false;
-    }
+        dlConnLabel_ = new QLabel("Input:");
+        pl->addWidget(dlConnLabel_);
+        dlConnCombo_ = new QComboBox;
+        dlConnCombo_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+        pl->addWidget(dlConnCombo_);
 
-private:
-    NdiReceiver* ndi_;
-    QComboBox*   combo_;
-    QPushButton* refreshBtn_;
-    bool         settingSource_ = false;
-};
+        dlModeLabel_ = new QLabel("Mode:");
+        pl->addWidget(dlModeLabel_);
+        dlModeCombo_ = new QComboBox;
+        dlModeCombo_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+        pl->addWidget(dlModeCombo_);
 
-// ── Webcam tab ────────────────────────────────────────────────────────────────
-
-class WebcamSourceTab : public VideoSourceTab {
-    Q_OBJECT
-public:
-    explicit WebcamSourceTab(QWidget* parent = nullptr) : VideoSourceTab(parent) {
-        auto* layout = new QVBoxLayout(this);
-        layout->setContentsMargins(0, 0, 0, 0);
-        layout->setSpacing(6);
-
-        combo_ = new QComboBox;
-        combo_->setMinimumContentsLength(16);
-        combo_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
-        combo_->setPlaceholderText("No cameras found");
-        layout->addWidget(combo_);
-
-        auto* btnRow = new QHBoxLayout;
-        refreshBtn_ = new QPushButton("Refresh");
-        btnRow->addWidget(refreshBtn_);
-        btnRow->addStretch();
-        layout->addLayout(btnRow);
-
-        layout->addStretch();
-
-        connect(refreshBtn_, &QPushButton::clicked, this, &WebcamSourceTab::refreshSources);
-        connect(combo_, &QComboBox::currentTextChanged, this, [this](const QString& text) {
-            if (!settingSource_ && !text.isEmpty())
-                emit sourceActivated(text);
-        });
-
-    #if WEBCAM_AVAILABLE
-        mediaDevices_ = new QMediaDevices(this);
-        connect(mediaDevices_, &QMediaDevices::videoInputsChanged,
-            this,         &WebcamSourceTab::refreshSources);
-    #endif
-
-        refreshSources();
-    }
-
-    void refreshSources() override {
-        settingSource_ = true;
-
-        const QString previous = combo_->currentText();
-        combo_->clear();
-#if WEBCAM_AVAILABLE
-        for (const auto& dev : QMediaDevices::videoInputs())
-            combo_->addItem(dev.description());
-#endif
-
-        int nextIndex = -1;
-        if (!previous.isEmpty())
-            nextIndex = combo_->findText(previous);
-        if (nextIndex < 0 && combo_->count() > 0)
-            nextIndex = 0;
-
-        bool shouldActivate = false;
-        if (nextIndex >= 0) {
-            combo_->setCurrentIndex(nextIndex);
-            shouldActivate = (previous.isEmpty() || combo_->currentText() != previous);
-        }
-
-        settingSource_ = false;
-
-        if (shouldActivate && !combo_->currentText().isEmpty())
-            emit sourceActivated(combo_->currentText());
-    }
-
-    QString selectedSource() const override {
-        return combo_->currentText();
-    }
-
-    void setCurrentSource(const QString& name) override {
-        settingSource_ = true;
-        const int idx = combo_->findText(name);
-        if (idx >= 0) combo_->setCurrentIndex(idx);
-        settingSource_ = false;
-    }
-
-private:
-    QComboBox*   combo_;
-    QPushButton* refreshBtn_;
-    bool         settingSource_ = false;
-
-#if WEBCAM_AVAILABLE
-    QMediaDevices* mediaDevices_ = nullptr;
-#endif
-};
-
-// ── DeckLink tab ──────────────────────────────────────────────────────────────
-
-class DecklinkSourceTab : public VideoSourceTab {
-    Q_OBJECT
-public:
-    explicit DecklinkSourceTab(QWidget* parent = nullptr) : VideoSourceTab(parent) {
-        auto* layout = new QVBoxLayout(this);
-        layout->setContentsMargins(0, 0, 0, 0);
-        layout->setSpacing(6);
-
-#if defined(DECKLINK_AVAILABLE) && DECKLINK_AVAILABLE
-        warningLabel_ = new QLabel;
-        warningLabel_->setWordWrap(true);
-        warningLabel_->setVisible(false);
-        warningLabel_->setStyleSheet(
-            "color: #cc9900;"
-            "font-size: 11px;"
-            "padding: 8px 10px;"
-            "border: 1px solid palette(mid);"
-            "border-radius: 4px;"
-        );
-        layout->addWidget(warningLabel_);
-
-        combo_ = new QComboBox;
-        combo_->setMinimumContentsLength(16);
-        combo_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
-        combo_->setPlaceholderText("No DeckLink devices found");
-        layout->addWidget(combo_);
-
-        connLabel_ = new QLabel("Input:");
-        layout->addWidget(connLabel_);
-
-        connCombo_ = new QComboBox;
-        connCombo_->setMinimumContentsLength(10);
-        connCombo_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
-        layout->addWidget(connCombo_);
-
-        modeLabel_ = new QLabel("Mode:");
-        layout->addWidget(modeLabel_);
-
-        modeCombo_ = new QComboBox;
-        modeCombo_->setMinimumContentsLength(10);
-        modeCombo_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
-        layout->addWidget(modeCombo_);
-
-        allow10BitCheck_ = new QCheckBox("Allow 10-bit capture");
-        allow10BitCheck_->setChecked(true);
-        allow10BitCheck_->setToolTip(
+        dlAllow10Bit_ = new QCheckBox("Allow 10-bit capture");
+        dlAllow10Bit_->setChecked(true);
+        dlAllow10Bit_->setToolTip(
             "Use 10-bit YUV capture format when the signal supports it.\n"
             "Disable for 8-bit-only capture cards (Intensity Shuttle, older Mini Recorder).");
-        layout->addWidget(allow10BitCheck_);
+        pl->addWidget(dlAllow10Bit_);
 
         auto* btnRow = new QHBoxLayout;
-        refreshBtn_ = new QPushButton("Refresh");
-        btnRow->addWidget(refreshBtn_);
+        dlRefreshBtn_ = new QPushButton("Refresh");
+        btnRow->addWidget(dlRefreshBtn_);
         btnRow->addStretch();
-        layout->addLayout(btnRow);
+        pl->addLayout(btnRow);
 
-        layout->addStretch();
+        pl->addStretch();
+        propsStack_->addWidget(page);
+    }
 
-        connect(refreshBtn_, &QPushButton::clicked, this, &DecklinkSourceTab::refreshSources);
+    // ── Signal connections ────────────────────────────────────────────────
 
-        connect(combo_, &QComboBox::currentIndexChanged, this, [this](int) {
-            if (settingSource_) return;
-            const QString pid = combo_->currentData().toString();
-            if (pid.isEmpty()) return;
-            populateConnections(pid);
-            emit sourceActivated(pid);
+    connect(masterCombo_, &QComboBox::currentIndexChanged,
+            this,         &StreamSourcePanel::onSourceSelected);
+
+    connect(ndiRefreshBtn_, &QPushButton::clicked, this, [this]() {
+        if (ndi_) ndi_->discoverSources();
+    });
+
+    if (ndi_) {
+        connect(ndi_, &NdiReceiver::sourcesChanged, this, [this](QStringList sources) {
+            ndiSources_ = sources;
+            rebuildCombo();
         });
-
-        connect(connCombo_, &QComboBox::currentIndexChanged, this, [this](int) {
-            if (settingSource_) return;
-            const QString pid = combo_->currentData().toString();
-            populateDisplayModes(pid);
-            if (!pid.isEmpty()) emit sourceActivated(pid);
-        });
-
-        connect(modeCombo_, &QComboBox::currentIndexChanged, this, [this](int) {
-            if (settingSource_) return;
-            const QString pid = combo_->currentData().toString();
-            if (!pid.isEmpty()) emit sourceActivated(pid);
-        });
-
-        connect(allow10BitCheck_, &QCheckBox::toggled, this, [this](bool) {
-            if (settingSource_) return;
-            const QString pid = combo_->currentData().toString();
-            if (!pid.isEmpty()) emit sourceActivated(pid);
-        });
-
-        refreshSources();
-#else
-        auto* label = new QLabel("DeckLink is not available on this platform.");
-        label->setWordWrap(true);
-        label->setStyleSheet("color: palette(placeholderText); font-size: 11px;");
-        layout->addWidget(label);
-        layout->addStretch();
-#endif
     }
 
-    // Returns the persistent ID of the selected device.
-    QString selectedSource() const override {
-#if defined(DECKLINK_AVAILABLE) && DECKLINK_AVAILABLE
-        return combo_ ? combo_->currentData().toString() : QString{};
-#else
-        return {};
+#if WEBCAM_AVAILABLE
+    auto* mediaDevices = new QMediaDevices(this);
+    connect(mediaDevices, &QMediaDevices::videoInputsChanged,
+            this,         &StreamSourcePanel::rebuildCombo);
 #endif
-    }
 
-    QString selectedConnection() const {
-#if defined(DECKLINK_AVAILABLE) && DECKLINK_AVAILABLE
-        return connCombo_ ? connCombo_->currentData().toString() : QString{};
+    connect(dlRefreshBtn_, &QPushButton::clicked, this, &StreamSourcePanel::rebuildCombo);
+
+    connect(dlConnCombo_, &QComboBox::currentIndexChanged, this, [this](int) {
+        if (settingSource_) return;
+        populateDecklinkModes(currentId());
+        emitDecklinkSelection();
+    });
+    connect(dlModeCombo_, &QComboBox::currentIndexChanged, this, [this](int) {
+        if (settingSource_) return;
+        emitDecklinkSelection();
+    });
+    connect(dlAllow10Bit_, &QCheckBox::toggled, this, [this](bool) {
+        if (settingSource_) return;
+        emitDecklinkSelection();
+    });
+
+    rebuildCombo();
+    QTimer::singleShot(0, this, [this]() {
+        if (ndi_) ndi_->discoverSources();
+    });
+}
+
+// ── Private helpers ───────────────────────────────────────────────────────────
+
+void StreamSourcePanel::rebuildCombo() {
+    settingSource_ = true;
+
+    const SrcType prevType = currentType();
+    const QString prevId   = currentId();
+
+    comboModel_->clear();
+
+    const QColor dimColor = qApp->palette().color(QPalette::PlaceholderText);
+
+    auto addHeader = [&](const QString& label) {
+        auto* item = new QStandardItem("── " + label + " ──");
+        item->setFlags(Qt::NoItemFlags);
+        item->setForeground(dimColor);
+        comboModel_->appendRow(item);
+    };
+
+    auto addEntry = [&](SrcType type, const QString& display, const QString& id) {
+        auto* item = new QStandardItem(display);
+        item->setData(static_cast<int>(type), TypeRole);
+        item->setData(id, IdRole);
+        comboModel_->appendRow(item);
+    };
+
+    auto addPlaceholder = [&](const QString& text) {
+        auto* item = new QStandardItem(text);
+        item->setFlags(Qt::NoItemFlags);
+        item->setForeground(dimColor);
+        comboModel_->appendRow(item);
+    };
+
+    // NDI section — always shown
+    addHeader("NDI");
+    if (ndiSources_.isEmpty())
+        addPlaceholder("    No NDI sources found");
+    else
+        for (const auto& src : ndiSources_)
+            addEntry(SrcType::Ndi, src, src);
+
+    // Webcam section — always shown
+    addHeader("Webcam");
+#if WEBCAM_AVAILABLE
+    const auto cams = QMediaDevices::videoInputs();
+    if (cams.isEmpty())
+        addPlaceholder("    No cameras found");
+    else
+        for (const auto& dev : cams)
+            addEntry(SrcType::Webcam, dev.description(), dev.description());
 #else
-        return {};
+    addPlaceholder("    Not available on this platform");
 #endif
-    }
 
-    uint32_t selectedDisplayMode() const {
+    // DeckLink section — always shown
+    addHeader("DeckLink");
 #if defined(DECKLINK_AVAILABLE) && DECKLINK_AVAILABLE
-        return modeCombo_ ? static_cast<uint32_t>(modeCombo_->currentData().toUInt()) : 0u;
+    {
+        QString err;
+        const auto devs = DeckLinkCapture::listDeviceInfos(&err);
+        if (dlWarning_) { dlWarning_->setVisible(!err.isEmpty()); dlWarning_->setText(err); }
+        if (devs.isEmpty())
+            addPlaceholder("    No DeckLink devices found");
+        else
+            for (const auto& dev : devs)
+                addEntry(SrcType::DeckLink, dev.displayName, dev.persistentId);
+    }
 #else
-        return 0u;
+    addPlaceholder("    Not available on this platform");
 #endif
-    }
 
-    bool selectedAllow10Bit() const {
-#if defined(DECKLINK_AVAILABLE) && DECKLINK_AVAILABLE
-        return allow10BitCheck_ ? allow10BitCheck_->isChecked() : true;
-#else
-        return true;
-#endif
-    }
-
-    void setCurrentDecklinkDevice(const QString& persistentId, const QString& connection,
-                                   uint32_t displayMode, bool allow10Bit) {
-#if defined(DECKLINK_AVAILABLE) && DECKLINK_AVAILABLE
-        settingSource_ = true;
-
-        int idx = -1;
-        for (int i = 0; i < combo_->count(); ++i) {
-            if (combo_->itemData(i).toString() == persistentId) { idx = i; break; }
-        }
-        if (idx >= 0) combo_->setCurrentIndex(idx);
-
-        if (!combo_->currentData().toString().isEmpty())
-            populateConnections(combo_->currentData().toString());
-
-        const int connIdx = connCombo_->findData(connection);
-        if (connIdx >= 0) connCombo_->setCurrentIndex(connIdx);
-
-        populateDisplayModes(combo_->currentData().toString());
-
-        // Restore mode
-        for (int i = 0; i < modeCombo_->count(); ++i) {
-            if (static_cast<uint32_t>(modeCombo_->itemData(i).toUInt()) == displayMode) {
-                modeCombo_->setCurrentIndex(i);
+    // Restore previous selection, else pick first selectable item
+    bool restored = false;
+    if (prevType != SrcType::None) {
+        for (int i = 0; i < comboModel_->rowCount(); ++i) {
+            auto* item = comboModel_->item(i);
+            if (item
+                && item->data(TypeRole).toInt() == static_cast<int>(prevType)
+                && item->data(IdRole).toString() == prevId) {
+                masterCombo_->setCurrentIndex(i);
+                restored = true;
                 break;
             }
         }
-
-        allow10BitCheck_->setChecked(allow10Bit);
-
-        settingSource_ = false;
-#else
-        (void)persistentId; (void)connection; (void)displayMode; (void)allow10Bit;
-#endif
+    }
+    if (!restored) {
+        for (int i = 0; i < comboModel_->rowCount(); ++i) {
+            if (comboModel_->item(i)->flags() & Qt::ItemIsEnabled) {
+                masterCombo_->setCurrentIndex(i);
+                break;
+            }
+        }
     }
 
+    settingSource_ = false;
+    onSourceSelected(masterCombo_->currentIndex());
+}
+
+void StreamSourcePanel::onSourceSelected(int index) {
+    if (settingSource_) return;
+    if (index < 0 || index >= comboModel_->rowCount()) {
+        propsStack_->setVisible(false);
+        return;
+    }
+    auto* item = comboModel_->item(index);
+    if (!item || !(item->flags() & Qt::ItemIsEnabled)) {
+        propsStack_->setVisible(false);
+        return;
+    }
+
+    const auto    type = static_cast<SrcType>(item->data(TypeRole).toInt());
+    const QString id   = item->data(IdRole).toString();
+
+    switch (type) {
+    case SrcType::Ndi:
+        propsStack_->setCurrentIndex(0);
+        propsStack_->setVisible(true);
+        if (!id.isEmpty()) emit ndiSourceSelected(id);
+        break;
+
+    case SrcType::Webcam:
+        propsStack_->setVisible(false);
+        if (!id.isEmpty()) emit webcamSourceSelected(id);
+        break;
+
+    case SrcType::DeckLink:
+        settingSource_ = true;
+        populateDecklinkConnections(id);
+        settingSource_ = false;
+        propsStack_->setCurrentIndex(1);
+        propsStack_->setVisible(true);
+        emitDecklinkSelection();
+        break;
+
+    default:
+        propsStack_->setVisible(false);
+        break;
+    }
+}
+
+void StreamSourcePanel::emitDecklinkSelection() {
+    const QString   pid  = currentId();
+    const QString   conn = dlConnCombo_->currentData().toString();
+    const uint32_t  mode = static_cast<uint32_t>(dlModeCombo_->currentData().toUInt());
+    const bool      b10  = dlAllow10Bit_->isChecked();
+    if (!pid.isEmpty())
+        emit decklinkSourceSelected(pid, conn, mode, b10);
+}
+
+void StreamSourcePanel::populateDecklinkConnections(const QString& pid) {
 #if defined(DECKLINK_AVAILABLE) && DECKLINK_AVAILABLE
-    void refreshSources() override {
-        settingSource_ = true;
+    const QString prev = dlConnCombo_->currentData().toString();
+    dlConnCombo_->clear();
 
-        const QString prevPid = combo_->currentData().toString();
-        combo_->clear();
+    const auto conns = DeckLinkCapture::supportedConnections(pid);
+    const bool multi = conns.size() > 1;
+    dlConnLabel_->setVisible(multi);
+    dlConnCombo_->setVisible(multi);
 
-        QString err;
-        const auto devs = DeckLinkCapture::listDeviceInfos(&err);
-        const bool apiMissing = !err.isEmpty();
-        warningLabel_->setVisible(apiMissing);
-        warningLabel_->setText(err);
-        combo_->setVisible(!apiMissing);
-        connLabel_->setVisible(!apiMissing);
-        connCombo_->setVisible(!apiMissing);
-        modeLabel_->setVisible(!apiMissing);
-        modeCombo_->setVisible(!apiMissing);
-        allow10BitCheck_->setVisible(!apiMissing);
-        refreshBtn_->setVisible(!apiMissing);
-
-        if (apiMissing) {
-            settingSource_ = false;
-            return;
-        }
-
-        for (const auto& d : devs)
-            combo_->addItem(d.displayName, d.persistentId);
-
-        // Restore previous selection by persistent ID.
-        int nextIndex = -1;
-        for (int i = 0; i < combo_->count(); ++i) {
-            if (combo_->itemData(i).toString() == prevPid) { nextIndex = i; break; }
-        }
-        if (nextIndex < 0 && combo_->count() > 0) nextIndex = 0;
-        if (nextIndex >= 0) combo_->setCurrentIndex(nextIndex);
-
-        const QString pid = combo_->currentData().toString();
-        if (!pid.isEmpty()) {
-            populateConnections(pid);
-        }
-
-        settingSource_ = false;
-
-        if (!pid.isEmpty()) emit sourceActivated(pid);
+    for (const auto& c : conns) {
+        const QString n = DeckLinkCapture::connectionName(c);
+        dlConnCombo_->addItem(n, n);
     }
+    const int idx = dlConnCombo_->findData(prev);
+    dlConnCombo_->setCurrentIndex(idx >= 0 ? idx : 0);
 
-    void setCurrentSource(const QString& persistentId) override {
-        settingSource_ = true;
-
-        int idx = -1;
-        for (int i = 0; i < combo_->count(); ++i) {
-            if (combo_->itemData(i).toString() == persistentId) { idx = i; break; }
-        }
-        if (idx >= 0) combo_->setCurrentIndex(idx);
-
-        const QString pid = combo_->currentData().toString();
-        if (!pid.isEmpty()) populateConnections(pid);
-
-        settingSource_ = false;
-    }
-
-private:
-    void populateConnections(const QString& persistentId) {
-        settingSource_ = true;
-
-        const QString prevConn = connCombo_->currentData().toString();
-        connCombo_->clear();
-
-        const auto conns = DeckLinkCapture::supportedConnections(persistentId);
-
-        if (conns.size() <= 1) {
-            connLabel_->setVisible(false);
-            connCombo_->setVisible(false);
-            if (!conns.isEmpty()) {
-                const QString n = DeckLinkCapture::connectionName(conns.first());
-                connCombo_->addItem(n, n);
-                connCombo_->setCurrentIndex(0);
-            }
-        } else {
-            connLabel_->setVisible(true);
-            connCombo_->setVisible(true);
-            for (const auto& c : conns) {
-                const QString n = DeckLinkCapture::connectionName(c);
-                connCombo_->addItem(n, n);
-            }
-            const int idx = connCombo_->findData(prevConn);
-            connCombo_->setCurrentIndex(idx >= 0 ? idx : 0);
-        }
-
-        settingSource_ = false;
-        populateDisplayModes(persistentId);
-    }
-
-    void populateDisplayModes(const QString& persistentId) {
-        settingSource_ = true;
-
-        const uint32_t prevMode = static_cast<uint32_t>(modeCombo_->currentData().toUInt());
-        modeCombo_->clear();
-
-        const auto modes = DeckLinkCapture::listDisplayModes(persistentId);
-
-        if (modes.size() <= 1) {
-            modeLabel_->setVisible(false);
-            modeCombo_->setVisible(false);
-            for (const auto& m : modes)
-                modeCombo_->addItem(m.name, static_cast<uint>(m.mode));
-            if (!modes.isEmpty()) modeCombo_->setCurrentIndex(0);
-        } else {
-            modeLabel_->setVisible(true);
-            modeCombo_->setVisible(true);
-            for (const auto& m : modes)
-                modeCombo_->addItem(m.name, static_cast<uint>(m.mode));
-
-            int idx = -1;
-            for (int i = 0; i < modeCombo_->count(); ++i) {
-                if (static_cast<uint32_t>(modeCombo_->itemData(i).toUInt()) == prevMode) {
-                    idx = i; break;
-                }
-            }
-            modeCombo_->setCurrentIndex(idx >= 0 ? idx : 0);
-        }
-
-        settingSource_ = false;
-    }
-
-    QComboBox*   combo_          = nullptr;
-    QLabel*      connLabel_      = nullptr;
-    QComboBox*   connCombo_      = nullptr;
-    QLabel*      modeLabel_      = nullptr;
-    QComboBox*   modeCombo_      = nullptr;
-    QCheckBox*   allow10BitCheck_ = nullptr;
-    QPushButton* refreshBtn_     = nullptr;
-    QLabel*      warningLabel_   = nullptr;
-    bool         settingSource_  = false;
+    populateDecklinkModes(pid);
 #else
-    void    refreshSources() override {}
-    void    setCurrentSource(const QString&) override {}
+    (void)pid;
 #endif
-};
+}
 
-// ── StreamSourcePanel ─────────────────────────────────────────────────────────
+void StreamSourcePanel::populateDecklinkModes(const QString& pid) {
+#if defined(DECKLINK_AVAILABLE) && DECKLINK_AVAILABLE
+    const uint32_t prev = static_cast<uint32_t>(dlModeCombo_->currentData().toUInt());
+    dlModeCombo_->clear();
 
-StreamSourcePanel::StreamSourcePanel(NdiReceiver* ndi, QWidget* parent)
-    : QWidget(parent)
-{
-    auto* layout = new QVBoxLayout(this);
-    layout->setContentsMargins(0, 0, 0, 0);
-    layout->setSpacing(0);
+    const auto modes = DeckLinkCapture::listDisplayModes(pid);
+    const bool multi = modes.size() > 1;
+    dlModeLabel_->setVisible(multi);
+    dlModeCombo_->setVisible(multi);
 
-    tabs_        = new QTabWidget;
-    ndiTab_      = new NdiSourceTab(ndi);
-    webcamTab_   = new WebcamSourceTab;
-    decklinkTab_ = new DecklinkSourceTab;
+    for (const auto& m : modes)
+        dlModeCombo_->addItem(m.name, static_cast<uint>(m.mode));
 
-    tabs_->addTab(ndiTab_,       "NDI");
-    tabs_->addTab(webcamTab_,    "Webcam");
-    tabs_->addTab(decklinkTab_,  "DeckLink");
+    int idx = -1;
+    for (int i = 0; i < dlModeCombo_->count(); ++i) {
+        if (static_cast<uint32_t>(dlModeCombo_->itemData(i).toUInt()) == prev) { idx = i; break; }
+    }
+    dlModeCombo_->setCurrentIndex(idx >= 0 ? idx : 0);
+#else
+    (void)pid;
+#endif
+}
 
-    layout->addWidget(tabs_);
+// ── Public API ────────────────────────────────────────────────────────────────
 
-    connect(ndiTab_, &VideoSourceTab::sourceActivated,
-            this,    &StreamSourcePanel::ndiSourceSelected);
+StreamSourcePanel::SrcType StreamSourcePanel::currentType() const {
+    const int idx = masterCombo_->currentIndex();
+    if (idx < 0 || idx >= comboModel_->rowCount()) return SrcType::None;
+    auto* item = comboModel_->item(idx);
+    if (!item || !(item->flags() & Qt::ItemIsEnabled)) return SrcType::None;
+    return static_cast<SrcType>(item->data(TypeRole).toInt());
+}
 
-    connect(webcamTab_, &VideoSourceTab::sourceActivated,
-            this,       &StreamSourcePanel::webcamSourceSelected);
-
-    connect(decklinkTab_, &VideoSourceTab::sourceActivated,
-            this, [this](const QString& devId) {
-        emit decklinkSourceSelected(devId,
-                                    decklinkTab_->selectedConnection(),
-                                    decklinkTab_->selectedDisplayMode(),
-                                    decklinkTab_->selectedAllow10Bit());
-    });
-
-    connect(tabs_, &QTabWidget::currentChanged, this, [this](int idx) {
-        QWidget* w = tabs_->widget(idx);
-        if (w == ndiTab_) {
-            const QString src = ndiTab_->selectedSource();
-            if (!src.isEmpty()) emit ndiSourceSelected(src);
-        } else if (w == webcamTab_) {
-            const QString dev = webcamTab_->selectedSource();
-            if (!dev.isEmpty()) emit webcamSourceSelected(dev);
-        } else if (w == decklinkTab_) {
-            const QString dev = decklinkTab_->selectedSource();
-            if (!dev.isEmpty())
-                emit decklinkSourceSelected(dev,
-                                            decklinkTab_->selectedConnection(),
-                                            decklinkTab_->selectedDisplayMode(),
-                                            decklinkTab_->selectedAllow10Bit());
-        }
-    });
+QString StreamSourcePanel::currentId() const {
+    const int idx = masterCombo_->currentIndex();
+    if (idx < 0 || idx >= comboModel_->rowCount()) return {};
+    auto* item = comboModel_->item(idx);
+    return item ? item->data(IdRole).toString() : QString{};
 }
 
 QString StreamSourcePanel::selectedNdiSource() const {
-    return ndiTab_->selectedSource();
+    return currentType() == SrcType::Ndi ? currentId() : QString{};
 }
 
 void StreamSourcePanel::setCurrentNdiSource(const QString& source) {
-    ndiTab_->setCurrentSource(source);
+    if (source.isEmpty()) return;
+    for (int i = 0; i < comboModel_->rowCount(); ++i) {
+        auto* item = comboModel_->item(i);
+        if (item
+            && item->data(TypeRole).toInt() == static_cast<int>(SrcType::Ndi)
+            && item->data(IdRole).toString() == source) {
+            settingSource_ = true;
+            masterCombo_->setCurrentIndex(i);
+            settingSource_ = false;
+            return;
+        }
+    }
+    // Source not yet discovered — add it as a placeholder so the project remembers it
+    if (!ndiSources_.contains(source)) {
+        ndiSources_.prepend(source);
+        rebuildCombo();
+        setCurrentNdiSource(source);
+    }
 }
 
 void StreamSourcePanel::setCurrentDecklinkSource(const QString& deviceId,
-                                                  const QString& connection,
-                                                  uint32_t displayMode, bool allow10Bit) {
-    decklinkTab_->setCurrentDecklinkDevice(deviceId, connection, displayMode, allow10Bit);
-}
+                                                   const QString& connection,
+                                                   uint32_t displayMode, bool allow10Bit) {
+    for (int i = 0; i < comboModel_->rowCount(); ++i) {
+        auto* item = comboModel_->item(i);
+        if (!item || item->data(TypeRole).toInt() != static_cast<int>(SrcType::DeckLink)) continue;
+        if (item->data(IdRole).toString() != deviceId) continue;
 
-#include "StreamSourcePanel.moc"
+        settingSource_ = true;
+        masterCombo_->setCurrentIndex(i);
+        populateDecklinkConnections(deviceId);
+        const int ci = dlConnCombo_->findData(connection);
+        if (ci >= 0) dlConnCombo_->setCurrentIndex(ci);
+        populateDecklinkModes(deviceId);
+        for (int m = 0; m < dlModeCombo_->count(); ++m) {
+            if (static_cast<uint32_t>(dlModeCombo_->itemData(m).toUInt()) == displayMode) {
+                dlModeCombo_->setCurrentIndex(m);
+                break;
+            }
+        }
+        dlAllow10Bit_->setChecked(allow10Bit);
+        settingSource_ = false;
+        propsStack_->setCurrentIndex(1);
+        propsStack_->setVisible(true);
+        return;
+    }
+}

@@ -8,8 +8,6 @@
 #include "PsnReceiver.h"
 #include "SacnReceiver.h"
 #include "SessionManager.h"
-#include "ui/SidebarWidget.h"
-#include "ui/CollapsibleSection.h"
 #include "ui/TrackersPanel.h"
 #include "ui/TrackerBar.h"
 #include "ui/StreamSourcePanel.h"
@@ -18,11 +16,10 @@
 #include "ui/CalibrationPanel.h"
 #include "ui/SessionPanel.h"
 #include <QApplication>
+#include <QDockWidget>
 #include <QMenuBar>
 #include <QStatusBar>
-#include <QHBoxLayout>
 #include <QVBoxLayout>
-#include <QSplitter>
 #include <QWidget>
 #include <QCloseEvent>
 #include <QFileDialog>
@@ -51,31 +48,11 @@ MainWindow::MainWindow(NdiReceiver* ndi, QWidget* parent) : QMainWindow(parent) 
     setWindowTitle("OnPoint");
     resize(1440, 810);
 
-    // ── Central layout: tracker bar + (video + sidebar) ──────────────────
+    // ── Create widgets ────────────────────────────────────────────────────
     video_ = new VideoWidget;
     video_->setCalibration(&calibration_);
-
-    sidebar_ = new SidebarWidget;
     trackerBar_ = new TrackerBar;
 
-    auto* leftPane = new QWidget;
-    auto* leftLayout = new QVBoxLayout(leftPane);
-    leftLayout->setContentsMargins(0, 0, 0, 0);
-    leftLayout->setSpacing(0);
-    leftLayout->addWidget(trackerBar_);
-    leftLayout->addWidget(video_);
-
-    auto* splitter = new QSplitter(Qt::Horizontal);
-    splitter->setChildrenCollapsible(false);
-    splitter->addWidget(leftPane);
-    splitter->addWidget(sidebar_);
-    splitter->setStretchFactor(0, 1);
-    splitter->setStretchFactor(1, 0);
-    splitter->setSizes({1160, 280});
-
-    setCentralWidget(splitter);
-
-    // ── Sidebar panels ────────────────────────────────────────────────────
     ndi_         = ndi;
     ndi_->setParent(this);
     webcam_      = new WebcamCapture(this);
@@ -96,12 +73,66 @@ MainWindow::MainWindow(NdiReceiver* ndi, QWidget* parent) : QMainWindow(parent) 
     networkPanel_    = new NetworkSettingsPanel;
     statsPanel_      = new StatsPanel;
 
-    sidebar_->addPanel("Session",         sessionPanel_,     false);
-    sidebar_->addPanel("Stream Source",   streamPanel_,      true);
-    calibrationSection_ = sidebar_->addPanel("Calibration", calibrationPanel_, false);
-    sidebar_->addPanel("Trackers",        trackersPanel_,    true);
-    sidebar_->addPanel("Network",         networkPanel_,     false);
-    sidebar_->addPanel("Stats",           statsPanel_,       false);
+    // ── Dock layout ───────────────────────────────────────────────────────
+    // Invisible central placeholder so dock widgets can fill all available space
+    auto* placeholder = new QWidget;
+    placeholder->setMaximumSize(0, 0);
+    setCentralWidget(placeholder);
+    setDockNestingEnabled(true);
+
+    // Video dock: tracker bar on top, video below
+    auto* videoContainer = new QWidget;
+    auto* videoLayout    = new QVBoxLayout(videoContainer);
+    videoLayout->setContentsMargins(0, 0, 0, 0);
+    videoLayout->setSpacing(0);
+    videoLayout->addWidget(trackerBar_);
+    videoLayout->addWidget(video_);
+    videoDock_ = new QDockWidget("Video", this);
+    videoDock_->setObjectName("dock_video");
+    videoDock_->setWidget(videoContainer);
+    videoDock_->setFeatures(QDockWidget::DockWidgetMovable | QDockWidget::DockWidgetFloatable);
+    addDockWidget(Qt::LeftDockWidgetArea, videoDock_);
+    setTabPosition(Qt::AllDockWidgetAreas, QTabWidget::North);
+
+    auto makeDock = [this](const QString& title, const QString& objName, QWidget* w) {
+        auto* d = new QDockWidget(title, this);
+        d->setObjectName(objName);
+        d->setWidget(w);
+        connect(d, &QDockWidget::topLevelChanged, d, [d](bool floating) {
+            if (floating) {
+                d->setWindowFlags(Qt::Window);
+                d->show();
+            }
+        });
+        return d;
+    };
+
+    // Same native-window behaviour for the video dock
+    connect(videoDock_, &QDockWidget::topLevelChanged, videoDock_, [this](bool floating) {
+        if (floating) {
+            videoDock_->setWindowFlags(Qt::Window);
+            videoDock_->show();
+        }
+    });
+
+    sessionDock_     = makeDock("Session",       "dock_session",     sessionPanel_);
+    streamDock_      = makeDock("Stream Source", "dock_stream",      streamPanel_);
+    calibrationDock_ = makeDock("Calibration",   "dock_calibration", calibrationPanel_);
+    trackersDock_    = makeDock("Trackers",       "dock_trackers",    trackersPanel_);
+    networkDock_     = makeDock("Network",        "dock_network",     networkPanel_);
+    statsDock_       = makeDock("Stats",          "dock_stats",       statsPanel_);
+    panelDocks_      = {sessionDock_, streamDock_, calibrationDock_,
+                        trackersDock_, networkDock_, statsDock_};
+
+    // Default layout: all 6 panels tabified on the right
+    addDockWidget(Qt::RightDockWidgetArea, sessionDock_);
+    for (auto* d : panelDocks_.sliced(1))
+        tabifyDockWidget(panelDocks_[0], d);
+    streamDock_->raise();   // show "Stream Source" tab by default
+
+    // Default sizing — overridden by saved state on subsequent launches
+    resizeDocks({videoDock_},   {1160}, Qt::Horizontal);
+    resizeDocks({sessionDock_}, {280},  Qt::Horizontal);
 
     // ── Status bar ────────────────────────────────────────────────────────
     auto makeSep = []() {
@@ -248,8 +279,6 @@ MainWindow::MainWindow(NdiReceiver* ndi, QWidget* parent) : QMainWindow(parent) 
                 calibration_.projectionFromList(cal.projectionMatrix);
             video_->setCalibration(&calibration_);
         }
-        if (calibrationSection_ && cal.isValid())
-            calibrationSection_->setExpanded(false);
         updateCalibStatus();
         if (sessionMgr_->state() == SessionManager::State::Hosting ||
             (sessionMgr_->state() == SessionManager::State::Joined &&
@@ -344,7 +373,7 @@ MainWindow::MainWindow(NdiReceiver* ndi, QWidget* parent) : QMainWindow(parent) 
             [this](SessionManager::State state) {
         bool isUserStation = (state == SessionManager::State::Joined &&
                               sessionMgr_->localRole() == SessionRole::User);
-        sidebar_->setVisible(!isUserStation);
+        for (auto* dock : panelDocks_) dock->setVisible(!isUserStation);
         menuBar()->setVisible(true);
         if (!isUserStation && state == SessionManager::State::Idle)
             video_->setAssignedTrackers({}, 255);  // restore full opacity
@@ -464,12 +493,30 @@ MainWindow::MainWindow(NdiReceiver* ndi, QWidget* parent) : QMainWindow(parent) 
     auto* actExit = fileMenu->addAction("E&xit");
     connect(actExit, &QAction::triggered, qApp, &QApplication::quit);
 
-    auto* viewMenu  = menuBar()->addMenu("&View");
-    auto* actToggleSidebar = viewMenu->addAction("Toggle Sidebar");
-    actToggleSidebar->setShortcut(QKeySequence("Ctrl+\\"));
-    connect(actToggleSidebar, &QAction::triggered, this, [this]() {
-        sidebar_->setVisible(!sidebar_->isVisible());
+    auto* viewMenu = menuBar()->addMenu("&View");
+    for (auto* d : panelDocks_)
+        viewMenu->addAction(d->toggleViewAction());
+    viewMenu->addSeparator();
+    viewMenu->addAction(videoDock_->toggleViewAction());
+    viewMenu->addSeparator();
+    auto* actResetLayout = viewMenu->addAction("Reset Layout");
+    connect(actResetLayout, &QAction::triggered, this, [this]() {
+        QSettings s("onpoint", "onpoint");
+        s.remove("windowGeometry");
+        s.remove("windowState");
+        resize(1440, 810);
+        resizeDocks({videoDock_},   {1160}, Qt::Horizontal);
+        resizeDocks({sessionDock_}, {280},  Qt::Horizontal);
+        for (auto* d : panelDocks_) d->setVisible(true);
+        streamDock_->raise();
     });
+
+    // Restore saved layout (must happen after all docks are created)
+    {
+        QSettings s("onpoint", "onpoint");
+        if (s.contains("windowGeometry")) restoreGeometry(s.value("windowGeometry").toByteArray());
+        if (s.contains("windowState"))    restoreState(s.value("windowState").toByteArray());
+    }
 
     auto* helpMenu  = menuBar()->addMenu("&Help");
     auto* actAbout  = helpMenu->addAction("About OnPoint...");
@@ -717,8 +764,6 @@ void MainWindow::applyProject() {
                 .arg(h[3],0,'g',6).arg(h[4],0,'g',6).arg(h[5],0,'g',6)
                 .arg(h[6],0,'g',6).arg(h[7],0,'g',6).arg(h[8],0,'g',6));
         calibrationPanel_->setCalibration(project_.calibration);
-        if (calibrationSection_)
-            calibrationSection_->setExpanded(false);
     }
     const auto& cv = project_.calibrationView;
     calibrationPanel_->setViewSettings(cv.showFloorGrid, cv.clickPlaneHeight, cv.showClickPlane);
@@ -762,14 +807,17 @@ void MainWindow::closeEvent(QCloseEvent* e) {
         if (btn == QMessageBox::Cancel) { e->ignore(); return; }
         if (btn == QMessageBox::Save)   onSaveProject();
     }
+    QSettings s("onpoint", "onpoint");
+    s.setValue("windowGeometry", saveGeometry());
+    s.setValue("windowState",    saveState());
     e->accept();
 }
 
 void MainWindow::changeEvent(QEvent* e) {
     QMainWindow::changeEvent(e);
-    // Hide sidebar when entering native fullscreen
     if (e->type() == QEvent::WindowStateChange) {
-        sidebar_->setFullscreenMode(isFullScreen());
+        const bool fs = isFullScreen();
+        for (auto* dock : panelDocks_) dock->setVisible(!fs);
     }
 }
 

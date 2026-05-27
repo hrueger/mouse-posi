@@ -1,12 +1,15 @@
 #pragma once
 #include <QWidget>
-#include <QString>
+#include <QStringList>
 #include <cstdint>
 
 class NdiReceiver;
-class QTabWidget;
-class VideoSourceTab;
-class DecklinkSourceTab;
+class QComboBox;
+class QStackedWidget;
+class QLabel;
+class QCheckBox;
+class QPushButton;
+class QStandardItemModel;
 
 class StreamSourcePanel : public QWidget {
     Q_OBJECT
@@ -25,8 +28,34 @@ signals:
                                 uint32_t displayMode, bool allow10Bit);
 
 private:
-    QTabWidget*        tabs_;
-    VideoSourceTab*    ndiTab_;
-    VideoSourceTab*    webcamTab_;
-    DecklinkSourceTab* decklinkTab_;
+    enum class SrcType : int { None = 0, Ndi = 1, Webcam = 2, DeckLink = 3 };
+
+    void rebuildCombo();
+    void onSourceSelected(int index);
+    void populateDecklinkConnections(const QString& pid);
+    void populateDecklinkModes(const QString& pid);
+    void emitDecklinkSelection();
+    SrcType currentType() const;
+    QString currentId()   const;
+
+    NdiReceiver*        ndi_          = nullptr;
+    QStringList         ndiSources_;
+
+    QComboBox*          masterCombo_  = nullptr;
+    QStandardItemModel* comboModel_   = nullptr;
+    QStackedWidget*     propsStack_   = nullptr;
+
+    // NDI props page (stack index 0)
+    QPushButton* ndiRefreshBtn_ = nullptr;
+
+    // DeckLink props page (stack index 1)
+    QLabel*      dlWarning_     = nullptr;
+    QLabel*      dlConnLabel_   = nullptr;
+    QComboBox*   dlConnCombo_   = nullptr;
+    QLabel*      dlModeLabel_   = nullptr;
+    QComboBox*   dlModeCombo_   = nullptr;
+    QCheckBox*   dlAllow10Bit_  = nullptr;
+    QPushButton* dlRefreshBtn_  = nullptr;
+
+    bool settingSource_ = false;
 };
