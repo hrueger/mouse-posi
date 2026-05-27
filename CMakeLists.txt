@@ -112,11 +112,20 @@ if(WIN32)
         "C:/Program Files (x86)/NDI/NDI Advanced SDK 6"
         "$ENV{NDI_SDK_DIR}"
     )
-else()
+elseif(APPLE)
     set(NDI_SEARCH_PATHS
         "${CMAKE_SOURCE_DIR}/ndi"
         "/Library/NDI SDK for Apple"
         "/usr/local"
+        "$ENV{NDI_SDK_DIR}"
+    )
+else()
+    set(NDI_SEARCH_PATHS
+        "${CMAKE_SOURCE_DIR}/ndi"
+        "/opt/ndi"
+        "/usr/local"
+        "/usr"
+        "$ENV{NDI_SDK_DIR}"
     )
 endif()
 
@@ -134,12 +143,23 @@ foreach(NDI_BASE ${NDI_SEARCH_PATHS})
                     break()
                 endif()
             endforeach()
-        else()
+        elseif(APPLE)
             if(EXISTS "${NDI_BASE}/lib/macOS/libndi.dylib")
                 set(NDI_LIB "${NDI_BASE}/lib/macOS/libndi.dylib")
             elseif(EXISTS "${NDI_BASE}/lib/libndi.dylib")
                 set(NDI_LIB "${NDI_BASE}/lib/libndi.dylib")
             endif()
+        else()
+            foreach(_lib_path
+                "${NDI_BASE}/lib/x86_64-linux-gnu/libndi.so"
+                "${NDI_BASE}/lib/x64/libndi.so"
+                "${NDI_BASE}/lib/libndi.so"
+                "${NDI_BASE}/lib64/libndi.so")
+                if(EXISTS "${_lib_path}")
+                    set(NDI_LIB "${_lib_path}")
+                    break()
+                endif()
+            endforeach()
         endif()
         if(NDI_LIB)
             set(NDI_FOUND TRUE)
@@ -205,11 +225,16 @@ else()
             "Install the NDI 6 SDK for Windows from https://ndi.video/download-ndi-sdk/ "
             "or place the SDK directory under ${CMAKE_SOURCE_DIR}/ndi/.\n"
             "You can also set the NDI_SDK_DIR environment variable to the SDK root.")
-    else()
+    elseif(APPLE)
         message(FATAL_ERROR
             "NDI SDK not found. "
             "Install 'NDI SDK for Apple' (6.x) so CMake can find "
             "Processing.NDI.Lib.h and libndi.dylib.")
+    else()
+        message(FATAL_ERROR
+            "NDI SDK not found. Install the NDI SDK for Linux so CMake can find "
+            "Processing.NDI.Lib.h and libndi.so, place it under ${CMAKE_SOURCE_DIR}/ndi/, "
+            "or set NDI_SDK_DIR to the SDK root.")
     endif()
 endif()
 
@@ -273,6 +298,25 @@ if(APPLE)
     target_sources(onpoint PRIVATE "${_decklink_macos_inc}/DeckLinkAPIDispatch.cpp")
     target_compile_definitions(onpoint PRIVATE DECKLINK_AVAILABLE=1)
 
+endif()
+
+# ── Linux-specific ────────────────────────────────────────────────────────────
+if(UNIX AND NOT APPLE)
+    find_path(DNSSD_INCLUDE_DIR dns_sd.h)
+    find_library(DNSSD_LIB dns_sd)
+    if(NOT DNSSD_INCLUDE_DIR OR NOT DNSSD_LIB)
+        message(FATAL_ERROR
+            "DNS-SD compatibility library not found. Install libavahi-compat-libdnssd-dev "
+            "(Debian/Ubuntu) or the equivalent package for your distribution.")
+    endif()
+
+    target_sources(onpoint PRIVATE src/DnsSdBridge_win.cpp)
+    target_include_directories(onpoint PRIVATE "${DNSSD_INCLUDE_DIR}")
+    target_link_libraries(onpoint PRIVATE "${DNSSD_LIB}")
+    target_compile_definitions(onpoint PRIVATE DNSSD_AVAILABLE=1)
+    message(STATUS "Found DNS-SD compatibility library — session discovery enabled")
+
+    install(TARGETS onpoint RUNTIME DESTINATION bin)
 endif()
 
 # ── Windows-specific ──────────────────────────────────────────────────────────

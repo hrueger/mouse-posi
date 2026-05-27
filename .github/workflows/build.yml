@@ -4,6 +4,8 @@ on:
   push:
     branches: ["**"]
     tags: ["v*"]
+  pull_request:
+    branches: ["**"]
   workflow_dispatch:
     inputs:
       tag:
@@ -266,10 +268,197 @@ jobs:
           if-no-files-found: error
 
   # ─────────────────────────────────────────────────────────────────────────────
+  build-linux:
+    name: Linux x64
+    runs-on: ubuntu-22.04
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref }}
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            ninja-build \
+            curl \
+            file \
+            unzip \
+            libgl1-mesa-dev \
+            libxkbcommon-dev \
+            libxcb-cursor0 \
+            libxcb-cursor-dev \
+            libopencv-dev \
+            libavahi-compat-libdnssd-dev
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: "6.8.3"
+          host: linux
+          target: desktop
+          arch: linux_gcc_64
+          modules: "qtmultimedia"
+          cache: true
+
+      - name: Install NDI SDK
+        env:
+          NDI_SDK_URL_LINUX: ${{ secrets.NDI_SDK_URL_LINUX }}
+        run: bash .github/scripts/install-ndi-linux.sh
+
+      - name: Configure
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR" \
+            -DCMAKE_INSTALL_PREFIX="$PWD/package/OnPoint-Linux-x86_64"
+
+      - name: Build
+        run: cmake --build build --parallel $(nproc)
+
+      - name: Package
+        run: |
+          set -euo pipefail
+
+          appdir="$PWD/package/OnPoint-Linux-x86_64"
+          mkdir -p "$appdir/bin" "$appdir/lib" "$appdir/plugins" "$appdir/share/doc/onpoint"
+
+          cp build/onpoint "$appdir/bin/"
+          cp -a ndi/lib/libndi.so* "$appdir/lib/"
+          cp README.md "$appdir/share/doc/onpoint/" 2>/dev/null || true
+
+          # Bundle Qt from the aqt installation.  The Linux artifact is built
+          # against Qt 6.8 from QT_ROOT_DIR, which is not available on a clean
+          # Ubuntu install, so the launcher must not depend on system Qt.
+          cp -aL "$QT_ROOT_DIR/lib"/libQt6*.so* "$appdir/lib/"
+
+          for plugin_dir in \
+            platforms \
+            platformthemes \
+            imageformats \
+            iconengines \
+            tls \
+            xcbglintegrations \
+            multimedia; do
+            if [ -d "$QT_ROOT_DIR/plugins/$plugin_dir" ]; then
+              cp -a "$QT_ROOT_DIR/plugins/$plugin_dir" "$appdir/plugins/"
+            fi
+          done
+
+          cat > "$appdir/bin/qt.conf" <<'EOF'
+          [Paths]
+          Prefix = ..
+          Plugins = plugins
+          EOF
+
+          should_bundle() {
+            local lib="$1"
+            local soname
+            soname="$(basename "$lib")"
+
+            # Do not bundle glibc/loader primitives; they must come from the
+            # target system.  Bundle the rest of the runtime closure so the
+            # archive works on minimal Ubuntu installs that may not have GLX,
+            # OpenCV, TBB, PulseAudio, or Qt plugin dependencies preinstalled.
+            case "$soname" in
+              libc.so.*|ld-linux-x86-64.so.*|libpthread.so.*|libdl.so.*|librt.so.*|libm.so.*|libresolv.so.*)
+                return 1
+                ;;
+            esac
+
+            case "$lib" in
+              "$appdir"/*|"$QT_ROOT_DIR"/*|"$PWD"/ndi/*|/usr/lib/*|/lib/*)
+                return 0
+                ;;
+              *)
+                return 1
+                ;;
+            esac
+          }
+
+          copy_deps() {
+            local target="$1"
+            ldd "$target" \
+              | awk '/=> \/.*\.so/ {print $3} /^\s*\/.*\.so/ {print $1}' \
+              | while IFS= read -r lib; do
+                  [ -f "$lib" ] || continue
+                  case "$lib" in
+                    "$appdir"/*)
+                      continue
+                      ;;
+                  esac
+                  if should_bundle "$lib"; then
+                    cp -aL "$lib" "$appdir/lib/"
+                  fi
+                done
+          }
+
+          copy_deps build/onpoint
+          find "$appdir/plugins" -type f -name '*.so' -print0 | while IFS= read -r -d '' plugin; do
+            copy_deps "$plugin"
+          done
+
+          # Resolve transitive dependencies from the libraries we just copied.
+          for _ in 1 2 3; do
+            find "$appdir/lib" -type f -name '*.so*' -print0 | while IFS= read -r -d '' lib; do
+              copy_deps "$lib" || true
+            done
+          done
+
+          {
+            echo '#!/usr/bin/env bash'
+            echo 'set -euo pipefail'
+            echo 'APPDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"'
+            echo 'export LD_LIBRARY_PATH="$APPDIR/lib:${LD_LIBRARY_PATH:-}"'
+            echo 'export QT_PLUGIN_PATH="$APPDIR/plugins:${QT_PLUGIN_PATH:-}"'
+            echo 'exec "$APPDIR/bin/onpoint" "$@"'
+          } > "$appdir/run-onpoint.sh"
+          chmod +x "$appdir/run-onpoint.sh"
+
+          echo "Checking packaged binary dependencies"
+          LD_LIBRARY_PATH="$appdir/lib" ldd "$appdir/bin/onpoint" | tee /tmp/onpoint-ldd.txt
+          if grep -q 'not found' /tmp/onpoint-ldd.txt; then
+            exit 1
+          fi
+
+          echo "Checking bundled runtime closure"
+          check_unbundled() {
+            local target="$1"
+            LD_LIBRARY_PATH="$appdir/lib" ldd "$target" \
+              | awk '/=> \/.*\.so/ {print $1 " " $3} /^\s*\/.*\.so/ {print $1 " " $1}' \
+              | while read -r soname lib; do
+                  [ -f "$lib" ] || continue
+                  if should_bundle "$lib" && [ "$lib" != "$appdir/lib/$soname" ]; then
+                    echo "Missing bundled runtime library: $soname from $lib"
+                    exit 1
+                  fi
+                done
+          }
+
+          check_unbundled "$appdir/bin/onpoint"
+          find "$appdir/plugins" -type f -name '*.so' -print0 | while IFS= read -r -d '' plugin; do
+            check_unbundled "$plugin"
+          done
+          find "$appdir/lib" -type f -name '*.so*' -print0 | while IFS= read -r -d '' lib; do
+            check_unbundled "$lib" || true
+          done
+
+          tar -C package -czf OnPoint-Linux-x86_64.tar.gz OnPoint-Linux-x86_64
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: OnPoint-Linux-x86_64
+          path: OnPoint-Linux-x86_64.tar.gz
+          if-no-files-found: error
+
+  # ─────────────────────────────────────────────────────────────────────────────
   release:
     name: GitHub Release
     if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
-    needs: [build-macos, build-windows]
+    needs: [build-macos, build-windows, build-linux]
     runs-on: ubuntu-latest
     env:
       TAG_NAME: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
@@ -287,3 +476,4 @@ jobs:
           files: |
             OnPoint.dmg
             OnPoint-*-Setup.exe
+            OnPoint-Linux-x86_64.tar.gz
