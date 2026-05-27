@@ -384,6 +384,11 @@ jobs:
               | awk '/=> \/.*\.so/ {print $3} /^\s*\/.*\.so/ {print $1}' \
               | while IFS= read -r lib; do
                   [ -f "$lib" ] || continue
+                  case "$lib" in
+                    "$appdir"/*)
+                      continue
+                      ;;
+                  esac
                   if should_bundle "$lib"; then
                     cp -aL "$lib" "$appdir/lib/"
                   fi
