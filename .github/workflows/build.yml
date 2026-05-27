@@ -320,18 +320,81 @@ jobs:
 
       - name: Package
         run: |
-          mkdir -p package/OnPoint-Linux-x86_64/bin package/OnPoint-Linux-x86_64/lib package/OnPoint-Linux-x86_64/share/doc/onpoint
-          cp build/onpoint package/OnPoint-Linux-x86_64/bin/
-          cp -a ndi/lib/libndi.so* package/OnPoint-Linux-x86_64/lib/
-          cp README.md package/OnPoint-Linux-x86_64/share/doc/onpoint/ 2>/dev/null || true
+          set -euo pipefail
+
+          appdir="$PWD/package/OnPoint-Linux-x86_64"
+          mkdir -p "$appdir/bin" "$appdir/lib" "$appdir/plugins" "$appdir/share/doc/onpoint"
+
+          cp build/onpoint "$appdir/bin/"
+          cp -a ndi/lib/libndi.so* "$appdir/lib/"
+          cp README.md "$appdir/share/doc/onpoint/" 2>/dev/null || true
+
+          # Bundle Qt from the aqt installation.  The Linux artifact is built
+          # against Qt 6.8 from QT_ROOT_DIR, which is not available on a clean
+          # Ubuntu install, so the launcher must not depend on system Qt.
+          cp -aL "$QT_ROOT_DIR/lib"/libQt6*.so* "$appdir/lib/"
+
+          for plugin_dir in \
+            platforms \
+            platformthemes \
+            imageformats \
+            iconengines \
+            tls \
+            xcbglintegrations \
+            multimedia; do
+            if [ -d "$QT_ROOT_DIR/plugins/$plugin_dir" ]; then
+              cp -a "$QT_ROOT_DIR/plugins/$plugin_dir" "$appdir/plugins/"
+            fi
+          done
+
+          cat > "$appdir/bin/qt.conf" <<'EOF'
+          [Paths]
+          Prefix = ..
+          Plugins = plugins
+          EOF
+
+          copy_deps() {
+            local target="$1"
+            ldd "$target" \
+              | awk '/=> \/.*\.so/ {print $3} /^\s*\/.*\.so/ {print $1}' \
+              | while IFS= read -r lib; do
+                  [ -f "$lib" ] || continue
+                  case "$lib" in
+                    "$QT_ROOT_DIR"/*|"$PWD"/ndi/*|/usr/lib/*/libopencv*|/usr/lib/*/libdns_sd*|/usr/lib/*/libavahi*)
+                      cp -aL "$lib" "$appdir/lib/"
+                      ;;
+                  esac
+                done
+          }
+
+          copy_deps build/onpoint
+          find "$appdir/plugins" -type f -name '*.so' -print0 | while IFS= read -r -d '' plugin; do
+            copy_deps "$plugin"
+          done
+
+          # Resolve transitive dependencies from the libraries we just copied.
+          for _ in 1 2 3; do
+            find "$appdir/lib" -type f -name '*.so*' -print0 | while IFS= read -r -d '' lib; do
+              copy_deps "$lib" || true
+            done
+          done
+
           {
             echo '#!/usr/bin/env bash'
             echo 'set -euo pipefail'
             echo 'APPDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"'
             echo 'export LD_LIBRARY_PATH="$APPDIR/lib:${LD_LIBRARY_PATH:-}"'
+            echo 'export QT_PLUGIN_PATH="$APPDIR/plugins:${QT_PLUGIN_PATH:-}"'
             echo 'exec "$APPDIR/bin/onpoint" "$@"'
-          } > package/OnPoint-Linux-x86_64/run-onpoint.sh
-          chmod +x package/OnPoint-Linux-x86_64/run-onpoint.sh
+          } > "$appdir/run-onpoint.sh"
+          chmod +x "$appdir/run-onpoint.sh"
+
+          echo "Checking packaged binary dependencies"
+          LD_LIBRARY_PATH="$appdir/lib" ldd "$appdir/bin/onpoint" | tee /tmp/onpoint-ldd.txt
+          if grep -q 'not found' /tmp/onpoint-ldd.txt; then
+            exit 1
+          fi
+
           tar -C package -czf OnPoint-Linux-x86_64.tar.gz OnPoint-Linux-x86_64
 
       - name: Upload artifact
