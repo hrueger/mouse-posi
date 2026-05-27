@@ -3,6 +3,7 @@
 #include "Project.h"
 #include <QPainter>
 #include <QMouseEvent>
+#include <QWheelEvent>
 #include <QResizeEvent>
 #include <QFont>
 #include <QFontMetrics>
@@ -101,11 +102,6 @@ void VideoWidget::setClickPlaneHeight(float h) {
 
 void VideoWidget::setShowClickPlane(bool on) {
     showClickPlane_ = on;
-    update();
-}
-
-void VideoWidget::setPsnOutputHeight(float h) {
-    psnOutputHeight_ = h;
     update();
 }
 
@@ -418,7 +414,7 @@ void VideoWidget::drawClickPlaneOverlay(QPainter& p) const {
     }
 
     // ── Label ─────────────────────────────────────────────────────────────
-    const QString label = QString("Click plane: %1 m").arg(double(h), 0, 'f', 2);
+    const QString label = QString("Height: %1 m").arg(double(h), 0, 'f', 2);
     QFont f("Arial", 9);
     p.setFont(f);
     QFontMetrics fm(f);
@@ -465,18 +461,12 @@ void VideoWidget::drawHeightGhosts(QPainter& p) const {
         p.drawLine(shadowWpt + QPointF(-8, 0), shadowWpt + QPointF(8, 0));
         p.drawLine(shadowWpt + QPointF(0, -8), shadowWpt + QPointF(0, 8));
 
-        // ② PSN output height ring — dashed, tracker colour
-        QColor psnColor = color;
-        psnColor.setAlphaF(0.45);
-        p.setPen(QPen(psnColor, 2.5, Qt::DashLine));
-        p.setBrush(Qt::NoBrush);
-        p.drawEllipse(wpt, 18.0, 18.0);
-
-        // ③ Click-plane ring — solid, tracker colour, slightly translucent.
+        // ② Height-plane ring (click plane = PSN output height) — solid, tracker colour.
         //    Main dot painted on top by the tracker loop.
         QColor clickColor = color;
         clickColor.setAlphaF(0.40);
         p.setPen(QPen(clickColor, 2.0));
+        p.setBrush(Qt::NoBrush);
         p.drawEllipse(wpt, 13.0, 13.0);
 
         p.setOpacity(1.0);
@@ -639,6 +629,16 @@ void VideoWidget::mouseReleaseEvent(QMouseEvent* e) {
         emit existingCalibPointClicked(idx, mouseWidgetPos_.toPoint());
     }
     update();
+}
+
+void VideoWidget::wheelEvent(QWheelEvent* e) {
+    int ticks = e->angleDelta().y();
+    if (ticks != 0) {
+        emit planeHeightScrolled((ticks / 120.0f) * 0.05f);
+        e->accept();
+        return;
+    }
+    QWidget::wheelEvent(e);
 }
 
 bool VideoWidget::event(QEvent* e) {

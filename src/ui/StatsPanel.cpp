@@ -15,11 +15,13 @@ StatsPanel::StatsPanel(QWidget* parent) : QWidget(parent) {
     ndiLabel_     = new QLabel("—");
     psnTxLabel_   = new QLabel("—");
     psnRxLabel_   = new QLabel("—");
+    sacnRxLabel_  = new QLabel("Disabled");
     sessionLabel_ = new QLabel("Offline");
 
     fl->addRow("NDI:",        ndiLabel_);
     fl->addRow("PSN TX:",     psnTxLabel_);
     fl->addRow("PSN RX:",     psnRxLabel_);
+    fl->addRow("sACN RX:",    sacnRxLabel_);
     fl->addRow("Session:",    sessionLabel_);
 
     layout->addLayout(fl);
@@ -40,6 +42,22 @@ void StatsPanel::setPsnTxRate(int packetsPerSec) {
 
 void StatsPanel::setPsnRxRate(int packetsPerSec, int trackerCount) {
     psnRxLabel_->setText(QString("%1 pkt/s, %2 trackers").arg(packetsPerSec).arg(trackerCount));
+}
+
+void StatsPanel::setSacnRxInfo(bool enabled, int packetsPerSec, float height) {
+    if (!enabled) {
+        sacnRxLabel_->setText("Disabled");
+        sacnRxLabel_->setStyleSheet("");
+        return;
+    }
+    if (packetsPerSec > 0)
+        sacnRxLabel_->setText(QString("%1 pkt/s  →  %2 m")
+                               .arg(packetsPerSec).arg(double(height), 0, 'f', 2));
+    else
+        sacnRxLabel_->setText("0 pkt/s (no signal)");
+    sacnRxLabel_->setStyleSheet(packetsPerSec > 0
+        ? "color: #33cc55;"
+        : "color: #cc8833;");
 }
 
 void StatsPanel::setSessionInfo(const QString& statusText, int peerCount) {

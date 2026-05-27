@@ -108,12 +108,20 @@ Project Project::load(const QString& path) {
     p.network.port            = static_cast<quint16>(net["port"].toInt(56565));
     p.network.psnInterface    = net["psnInterface"].toString();
     p.network.sessionInterface= net["sessionInterface"].toString();
+    QJsonObject sacn = net["sacnInput"].toObject();
+    p.network.sacnInput.enabled   = sacn["enabled"].toBool(false);
+    p.network.sacnInput.mode      = sacn["mode"].toString() == "unicast"
+                                    ? SacnMode::Unicast : SacnMode::Multicast;
+    p.network.sacnInput.iface     = sacn["iface"].toString();
+    p.network.sacnInput.universe  = static_cast<quint16>(sacn["universe"].toInt(1));
+    p.network.sacnInput.address   = static_cast<quint16>(sacn["address"].toInt(1));
+    p.network.sacnInput.minHeight = float(sacn["minHeight"].toDouble(0.0));
+    p.network.sacnInput.maxHeight = float(sacn["maxHeight"].toDouble(10.0));
 
     QJsonObject cv = root["calibrationView"].toObject();
     p.calibrationView.showFloorGrid    = cv["showFloorGrid"].toBool(false);
     p.calibrationView.clickPlaneHeight = float(cv["clickPlaneHeight"].toDouble(0.0));
     p.calibrationView.showClickPlane   = cv["showClickPlane"].toBool(false);
-    p.calibrationView.psnOutputHeight  = float(cv["psnOutputHeight"].toDouble(0.0));
 
     QJsonObject stMap = root["stationTrackers"].toObject();
     for (auto it = stMap.constBegin(); it != stMap.constEnd(); ++it)
@@ -166,13 +174,21 @@ void Project::save(const QString& path) const {
     net["port"]             = network.port;
     net["psnInterface"]     = network.psnInterface;
     net["sessionInterface"] = network.sessionInterface;
+    QJsonObject sacn;
+    sacn["enabled"]   = network.sacnInput.enabled;
+    sacn["mode"]      = network.sacnInput.mode == SacnMode::Unicast ? "unicast" : "multicast";
+    sacn["iface"]     = network.sacnInput.iface;
+    sacn["universe"]  = network.sacnInput.universe;
+    sacn["address"]   = network.sacnInput.address;
+    sacn["minHeight"] = double(network.sacnInput.minHeight);
+    sacn["maxHeight"] = double(network.sacnInput.maxHeight);
+    net["sacnInput"] = sacn;
     root["network"] = net;
 
     QJsonObject cv;
     cv["showFloorGrid"]    = calibrationView.showFloorGrid;
     cv["clickPlaneHeight"] = double(calibrationView.clickPlaneHeight);
     cv["showClickPlane"]   = calibrationView.showClickPlane;
-    cv["psnOutputHeight"]  = double(calibrationView.psnOutputHeight);
     root["calibrationView"] = cv;
 
     QJsonObject stMap;

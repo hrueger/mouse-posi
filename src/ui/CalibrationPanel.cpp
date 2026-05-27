@@ -101,16 +101,13 @@ CalibrationPanel::CalibrationPanel(VideoWidget* video, NdiReceiver* ndi,
     floorGridCheck_ = new QCheckBox("Show floor grid (1×1 m)");
     h3l->addWidget(floorGridCheck_);
 
-    mkHeightRow(h3l, "Click plane height:", clickPlaneSlider_, clickPlaneSpin_);
+    mkHeightRow(h3l, "Height (click / PSN output):", clickPlaneSlider_, clickPlaneSpin_);
 
     showClickPlaneCheck_ = new QCheckBox("Show click plane");
     h3l->addWidget(showClickPlaneCheck_);
 
     has3DControls_->setEnabled(false);
     layout->addWidget(has3DControls_);
-
-    // PSN output height is independent of calibration type.
-    mkHeightRow(layout, "PSN output height:", psnHeightSlider_, psnHeightSpin_);
 
     // Slider ↔ spinbox bidirectional sync; emit the signal from whichever side changed.
     connect(clickPlaneSlider_, &QSlider::valueChanged, this, [this](int v) {
@@ -123,18 +120,6 @@ CalibrationPanel::CalibrationPanel(VideoWidget* video, NdiReceiver* ndi,
         QSignalBlocker b(clickPlaneSlider_);
         clickPlaneSlider_->setValue(qRound(v * 100.0));
         emit clickPlaneHeightChanged(float(v));
-    });
-
-    connect(psnHeightSlider_, &QSlider::valueChanged, this, [this](int v) {
-        QSignalBlocker b(psnHeightSpin_);
-        psnHeightSpin_->setValue(v / 100.0);
-        emit psnOutputHeightChanged(float(v / 100.0));
-    });
-    connect(psnHeightSpin_, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
-            this, [this](double v) {
-        QSignalBlocker b(psnHeightSlider_);
-        psnHeightSlider_->setValue(qRound(v * 100.0));
-        emit psnOutputHeightChanged(float(v));
     });
 
     connect(floorGridCheck_, &QCheckBox::toggled,
@@ -273,11 +258,17 @@ void CalibrationPanel::setCalibration(const CalibrationData& cal) {
 }
 
 void CalibrationPanel::setViewSettings(bool showFloorGrid, float clickPlaneHeight,
-                                        bool showClickPlane, float psnOutputHeight) {
+                                        bool showClickPlane) {
     floorGridCheck_->setChecked(showFloorGrid);
     clickPlaneSpin_->setValue(clickPlaneHeight);
     showClickPlaneCheck_->setChecked(showClickPlane);
-    psnHeightSpin_->setValue(psnOutputHeight);
+}
+
+void CalibrationPanel::setPlaneHeight(float h) {
+    QSignalBlocker b1(clickPlaneSlider_);
+    QSignalBlocker b2(clickPlaneSpin_);
+    clickPlaneSpin_->setValue(double(h));
+    clickPlaneSlider_->setValue(qRound(h * 100.0f));
 }
 
 void CalibrationPanel::reset() {

@@ -6,6 +6,7 @@
 #include "DeckLinkCapture.h"
 #include "PsnSender.h"
 #include "PsnReceiver.h"
+#include "SacnReceiver.h"
 #include "SessionManager.h"
 #include "ui/SidebarWidget.h"
 #include "ui/CollapsibleSection.h"
@@ -79,9 +80,14 @@ MainWindow::MainWindow(NdiReceiver* ndi, QWidget* parent) : QMainWindow(parent) 
     ndi_->setParent(this);
     webcam_      = new WebcamCapture(this);
     decklink_    = new DeckLinkCapture(this);
-    psnSender_   = new PsnSender(this);
-    psnReceiver_ = new PsnReceiver(this);
-    sessionMgr_  = new SessionManager(this);
+    psnSender_    = new PsnSender(this);
+    psnReceiver_  = new PsnReceiver(this);
+    sacnReceiver_ = new SacnReceiver();   // no parent — lives on sacnThread_
+    sacnThread_   = new QThread(this);
+    sacnReceiver_->moveToThread(sacnThread_);
+    connect(sacnThread_, &QThread::finished, sacnReceiver_, &QObject::deleteLater);
+    sacnThread_->start();
+    sessionMgr_   = new SessionManager(this);
 
     sessionPanel_    = new SessionPanel(sessionMgr_);
     streamPanel_     = new StreamSourcePanel(ndi_);
@@ -126,6 +132,11 @@ MainWindow::MainWindow(NdiReceiver* ndi, QWidget* parent) : QMainWindow(parent) 
     statusPsnOut_ = new QLabel("● PSN Out");
     statusPsnOut_->setStyleSheet("color: #cc3333; padding: 0 8px;");
     statusBar()->addPermanentWidget(statusPsnOut_);
+
+    statusSacnIn_ = new QLabel("● sACN In");
+    statusSacnIn_->setStyleSheet("color: #888888; padding: 0 8px;");
+    statusSacnIn_->setVisible(false);
+    statusBar()->addPermanentWidget(statusSacnIn_);
 
     statusSession_ = new QLabel;
     leaveSessionBtn_ = new QPushButton("Leave Session");
@@ -212,6 +223,16 @@ MainWindow::MainWindow(NdiReceiver* ndi, QWidget* parent) : QMainWindow(parent) 
             psnReceiver_->stop();
             psnReceiver_->wait();
         }
+        sacnLastReceivedMs_ = -1;
+        statusSacnIn_->setText("● sACN In");
+        statusSacnIn_->setStyleSheet("color: #888888; padding: 0 8px;");
+        statusSacnIn_->setVisible(cfg.sacnInput.enabled);
+        const SacnInputConfig sacnCfg = cfg.sacnInput;
+        QMetaObject::invokeMethod(sacnReceiver_, [this, sacnCfg]() {
+            sacnReceiver_->stop();
+            if (sacnCfg.enabled)
+                sacnReceiver_->startListening(sacnCfg);
+        });
         markDirty();
     });
 
@@ -251,17 +272,20 @@ MainWindow::MainWindow(NdiReceiver* ndi, QWidget* parent) : QMainWindow(parent) 
     });
     connect(calibrationPanel_, &CalibrationPanel::clickPlaneHeightChanged,
             this, [this](float h) {
-        project_.calibrationView.clickPlaneHeight = h;
-        clickPlaneHeight_ = h;
-        video_->setClickPlaneHeight(h);
-        markDirty();
+        if (applyingProject_) return;
+        applyPlaneHeight(h);
     });
-    connect(calibrationPanel_, &CalibrationPanel::psnOutputHeightChanged,
-            this, [this](float h) {
-        project_.calibrationView.psnOutputHeight = h;
-        video_->setPsnOutputHeight(h);
-        psnSender_->setOutputHeight(h);
-        markDirty();
+    connect(sacnReceiver_, &SacnReceiver::heightReceived,
+            this, [this](float h, const QString& src) {
+        sacnLastReceivedMs_ = QDateTime::currentMSecsSinceEpoch();
+        sacnSourceName_     = src;
+        applyPlaneHeight(h);
+        statusSacnIn_->setText("● sACN In");
+        statusSacnIn_->setStyleSheet("color: #33cc55; padding: 0 8px;");
+    });
+    connect(video_, &VideoWidget::planeHeightScrolled,
+            this, [this](float delta) {
+        applyPlaneHeight(qBound(0.0f, clickPlaneHeight_ + delta, 20.0f));
     });
 
     connect(video_, &VideoWidget::mousePosInFrame, this, [this](QPointF framePt) {
@@ -466,6 +490,13 @@ MainWindow::MainWindow(NdiReceiver* ndi, QWidget* parent) : QMainWindow(parent) 
 MainWindow::~MainWindow() {
     timer_.stop();
     statsTimer_.stop();
+    // Stop the sACN socket in its own thread before quitting it.
+    // BlockingQueuedConnection ensures the socket is closed before we exit.
+    QMetaObject::invokeMethod(sacnReceiver_, [this]() {
+        sacnReceiver_->stop();
+    }, Qt::BlockingQueuedConnection);
+    sacnThread_->quit();
+    sacnThread_->wait();
     psnReceiver_->stop();
     ndi_->stop();
     psnReceiver_->wait();
@@ -473,6 +504,17 @@ MainWindow::~MainWindow() {
     log("=== session ended ===");
     delete logStream_;
 }
+
+void MainWindow::applyPlaneHeight(float h) {
+    h = qBound(0.0f, h, 20.0f);
+    clickPlaneHeight_ = h;
+    project_.calibrationView.clickPlaneHeight = h;
+    video_->setClickPlaneHeight(h);
+    psnSender_->setOutputHeight(h);
+    calibrationPanel_->setPlaneHeight(h);
+    markDirty();
+}
+
 
 void MainWindow::log(const QString& msg) {
     if (!logStream_) return;
@@ -679,9 +721,22 @@ void MainWindow::applyProject() {
             calibrationSection_->setExpanded(false);
     }
     const auto& cv = project_.calibrationView;
-    calibrationPanel_->setViewSettings(cv.showFloorGrid, cv.clickPlaneHeight,
-                                        cv.showClickPlane, cv.psnOutputHeight);
+    calibrationPanel_->setViewSettings(cv.showFloorGrid, cv.clickPlaneHeight, cv.showClickPlane);
     clickPlaneHeight_ = cv.clickPlaneHeight;
+    video_->setClickPlaneHeight(cv.clickPlaneHeight);
+    video_->setShowFloorGrid(cv.showFloorGrid);
+    video_->setShowClickPlane(cv.showClickPlane);
+    psnSender_->setOutputHeight(cv.clickPlaneHeight);
+    sacnLastReceivedMs_ = -1;
+    statusSacnIn_->setVisible(project_.network.sacnInput.enabled);
+    statusSacnIn_->setText("● sACN In");
+    statusSacnIn_->setStyleSheet("color: #888888; padding: 0 8px;");
+    const SacnInputConfig sacnCfg = project_.network.sacnInput;
+    QMetaObject::invokeMethod(sacnReceiver_, [this, sacnCfg]() {
+        sacnReceiver_->stop();
+        if (sacnCfg.enabled)
+            sacnReceiver_->startListening(sacnCfg);
+    });
     updateCalibStatus();
     applyingProject_ = false;
 }
@@ -736,6 +791,7 @@ void MainWindow::onTimer() {
         }
         lastLoggedPositions_ = trackerPositions_;
     }
+
     video_->setOwnPositions(trackerPositions_, project_.trackers);
     video_->setOwnRawPositions(trackerRawPositions_);
     if (!trackerPositions_.isEmpty())
@@ -760,6 +816,25 @@ void MainWindow::updateStatsTimer() {
     }
     statsPanel_->setPsnTxRate(txRate);
     statsPanel_->setPsnRxRate(rxRate, psnReceiver_->remotePositions().size());
+
+    int sacnRate = 0;
+    if (elapsed > 0.0) {
+        quint64 sacnTotal = sacnReceiver_->totalSacnReceived();
+        sacnRate = std::max(0, static_cast<int>(
+            std::llround((sacnTotal - lastSacnRxPackets_) / elapsed)));
+        lastSacnRxPackets_ = sacnTotal;
+    }
+    const bool sacnActive = project_.network.sacnInput.enabled
+        && sacnLastReceivedMs_ >= 0
+        && (QDateTime::currentMSecsSinceEpoch() - sacnLastReceivedMs_) < 2000;
+    if (project_.network.sacnInput.enabled) {
+        statusSacnIn_->setVisible(true);
+        if (!sacnActive) {
+            statusSacnIn_->setText("● sACN In");
+            statusSacnIn_->setStyleSheet("color: #888888; padding: 0 8px;");
+        }
+    }
+    statsPanel_->setSacnRxInfo(project_.network.sacnInput.enabled, sacnRate, clickPlaneHeight_);
 
     if (txRate > 0) {
         statusPsnOut_->setStyleSheet("color: #33aa44; padding: 0 4px;");

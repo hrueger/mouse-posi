@@ -9,6 +9,7 @@
 #include <QFile>
 #include <QTextStream>
 #include <QSize>
+#include <QThread>
 #include <QtGlobal>
 #include "Project.h"
 #include "Calibration.h"
@@ -19,6 +20,7 @@ class WebcamCapture;
 class DeckLinkCapture;
 class PsnSender;
 class PsnReceiver;
+class SacnReceiver;
 class SessionManager;
 class SidebarWidget;
 class TrackersPanel;
@@ -75,6 +77,7 @@ private:
     void log(const QString& msg);
 
     void handleVideoFrame(const QImage& frame);
+    void applyPlaneHeight(float h);
 
     VideoWidget*          video_;
     SidebarWidget*        sidebar_;
@@ -92,6 +95,8 @@ private:
     DeckLinkCapture* decklink_;
     PsnSender*    psnSender_;
     PsnReceiver*  psnReceiver_;
+    SacnReceiver* sacnReceiver_;
+    QThread*      sacnThread_  = nullptr;
     SessionManager* sessionMgr_;
     QTimer        timer_;
     QTimer        statsTimer_;
@@ -113,17 +118,21 @@ private:
     QLabel*       statusCalib_;
     QLabel*       statusSession_;
     QLabel*       statusPsnOut_;
+    QLabel*       statusSacnIn_;
     QPushButton*  leaveSessionBtn_;
 
     bool projectDirty_    = false;
     bool applyingProject_ = false;
+    qint64  sacnLastReceivedMs_ = -1;  // ms since epoch, -1 = never
+    QString sacnSourceName_;
 
     // Stats counters
     int     frameCount_   = 0;
     double  currentFps_   = 0.0;
 
-    quint64 lastPsnTxPackets_ = 0;
-    quint64 lastPsnRxPackets_ = 0;
+    quint64 lastPsnTxPackets_  = 0;
+    quint64 lastPsnRxPackets_  = 0;
+    quint64 lastSacnRxPackets_ = 0;
 
     // Debug logging
     QFile   logFile_;

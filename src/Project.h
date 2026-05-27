@@ -30,7 +30,18 @@ struct CalibrationViewSettings {
     bool  showFloorGrid    = false;
     float clickPlaneHeight = 0.0f;
     bool  showClickPlane   = false;
-    float psnOutputHeight  = 0.0f;
+};
+
+enum class SacnMode { Multicast, Unicast };
+
+struct SacnInputConfig {
+    bool      enabled   = false;
+    SacnMode  mode      = SacnMode::Multicast;
+    QString   iface;
+    quint16   universe  = 1;
+    quint16   address   = 1;    // DMX channel 1–512
+    float     minHeight = 0.0f;
+    float     maxHeight = 10.0f;
 };
 
 struct NetworkConfig {
@@ -41,6 +52,7 @@ struct NetworkConfig {
     quint16  port            = 56565;
     QString  psnInterface;      // NIC name for PSN UDP output (empty = OS default)
     QString  sessionInterface;  // NIC name for DNS-SD + TCP session (empty = OS default)
+    SacnInputConfig sacnInput;
 };
 
 struct Project {

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.25)
-project(onpoint VERSION 0.1.2 LANGUAGES CXX)
+project(onpoint VERSION 0.1.2 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -38,6 +38,7 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(qlementine)
 
+
 set(SOURCES
     src/resources.qrc
     src/main.cpp
@@ -48,6 +49,7 @@ set(SOURCES
     src/DeckLinkCapture.cpp
     src/PsnSender.cpp
     src/PsnReceiver.cpp
+    src/SacnReceiver.cpp
     src/Calibration.cpp
     src/Project.cpp
     # New sidebar UI
@@ -72,6 +74,7 @@ set(HEADERS
     src/DeckLinkCapture.h
     src/PsnSender.h
     src/PsnReceiver.h
+    src/SacnReceiver.h
     src/Calibration.h
     src/Project.h
     src/DnsSdBridge.h
@@ -156,8 +159,12 @@ if(NOT NDI_FOUND AND APPLE AND EXISTS "/usr/local/lib/libndi.dylib")
     endif()
 endif()
 
+target_sources(onpoint PRIVATE third_party/libe131/e131.c)
+set_source_files_properties(third_party/libe131/e131.c PROPERTIES LANGUAGE C)
+
 target_include_directories(onpoint PRIVATE
     src
+    third_party/libe131
     ${OpenCV_INCLUDE_DIRS}
 )
 

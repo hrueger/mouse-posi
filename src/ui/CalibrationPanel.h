@@ -25,8 +25,8 @@ public:
     ~CalibrationPanel() override;
 
     void setCalibration(const CalibrationData& cal);
-    void setViewSettings(bool showFloorGrid, float clickPlaneHeight, bool showClickPlane,
-                         float psnOutputHeight);
+    void setViewSettings(bool showFloorGrid, float clickPlaneHeight, bool showClickPlane);
+    void setPlaneHeight(float h);
     void reset();
     CalibrationData calibration() const { return result_; }
 
@@ -36,7 +36,6 @@ signals:
     void showFloorGridChanged(bool on);
     void clickPlaneHeightChanged(float h);
     void showClickPlaneChanged(bool on);
-    void psnOutputHeightChanged(float h);
 
 private slots:
     void onCalibrateToggled(bool on);
@@ -155,8 +154,6 @@ private:
     QSlider*        clickPlaneSlider_;
     QDoubleSpinBox* clickPlaneSpin_;
     QCheckBox*      showClickPlaneCheck_;
-    QSlider*        psnHeightSlider_;
-    QDoubleSpinBox* psnHeightSpin_;
 
     // Track signal connections so we can disconnect on toggle-off
     QList<QMetaObject::Connection> videoConnections_;

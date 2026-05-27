@@ -31,7 +31,6 @@ public slots:
     void setShowFloorGrid(bool on);
     void setClickPlaneHeight(float h);
     void setShowClickPlane(bool on);
-    void setPsnOutputHeight(float h);
     // Session: which trackers the local user is assigned (empty = all at full opacity)
     void setAssignedTrackers(const QList<int>& ids, int unassignedAlpha = 80);
 
@@ -51,6 +50,8 @@ public slots:
 
 signals:
     void fullscreenRequested();
+    // Emitted on mouse-wheel scroll over the video (delta in metres, ~0.05 m per notch).
+    void planeHeightScrolled(float delta);
     // Emitted on mouse/touch *release* in calibration mode (after optional drag to adjust).
     void calibPointClicked(QPointF imagePos);
     void mousePosInFrame(QPointF imagePos);
@@ -66,6 +67,7 @@ protected:
     void mouseMoveEvent(QMouseEvent*) override;
     void mousePressEvent(QMouseEvent*) override;
     void mouseReleaseEvent(QMouseEvent*) override;
+    void wheelEvent(QWheelEvent*) override;
     void resizeEvent(QResizeEvent*) override;
 
 private:
@@ -112,7 +114,6 @@ private:
     bool  showFloorGrid_    = false;
     float clickPlaneHeight_ = 0.0f;
     bool  showClickPlane_   = false;
-    float psnOutputHeight_  = 0.0f;
 
     QList<QPointF> calibOverlayPoints_;
     int            calibOverlayHighlight_ = -1;
