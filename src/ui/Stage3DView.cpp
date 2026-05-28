@@ -1,0 +1,782 @@
+#include "Stage3DView.h"
+#include <QOpenGLContext>
+#include <QPainter>
+#include <QPaintEvent>
+#include <QMouseEvent>
+#include <QWheelEvent>
+#include <QKeyEvent>
+#include <QMatrix4x4>
+#include <QVector3D>
+#include <QtMath>
+#include <cmath>
+#include <algorithm>
+
+// ─── Shader sources ──────────────────────────────────────────────────────────
+
+static const char* kVertSrc = R"(
+#version 330 core
+layout(location = 0) in vec3 aPos;
+uniform mat4 uMVP;
+void main() { gl_Position = uMVP * vec4(aPos, 1.0); }
+)";
+
+static const char* kFragSrc = R"(
+#version 330 core
+uniform vec4 uColor;
+out vec4 fragColor;
+void main() { fragColor = uColor; }
+)";
+
+// ─── Construction / destruction ───────────────────────────────────────────────
+
+Stage3DView::Stage3DView(QWidget* parent)
+    : QOpenGLWidget(parent)
+{
+    setFocusPolicy(Qt::StrongFocus);
+    // Format is set globally in main() via QSurfaceFormat::setDefaultFormat()
+}
+
+Stage3DView::~Stage3DView()
+{
+    cleanup();
+}
+
+void Stage3DView::cleanup()
+{
+    if (context())
+        disconnect(context(), &QOpenGLContext::aboutToBeDestroyed, this, &Stage3DView::cleanup);
+    makeCurrent();
+    if (vbo_.isCreated()) vbo_.destroy();
+    if (vao_.isCreated()) vao_.destroy();
+    delete shader_;
+    shader_ = nullptr;
+    doneCurrent();
+}
+
+// ─── Public API ───────────────────────────────────────────────────────────────
+
+void Stage3DView::setCalibration(const Calibration* c, const QList<QPointF>& stagePoints)
+{
+    calibration_       = c;
+    calibStagePoints_  = stagePoints;
+    update();
+}
+
+void Stage3DView::setStageObjects(const QList<StageObject>& objs)
+{
+    stageObjects_ = objs;
+    update();
+}
+
+void Stage3DView::setTrackerPositions(const QMap<int, QPair<float,float>>& pos,
+                                      const QList<TrackerConfig>& trackers)
+{
+    trackerPositions_ = pos;
+    trackers_         = trackers;
+    update();
+}
+
+void Stage3DView::setActiveTool(Stage3DTool tool)
+{
+    activeTool_   = tool;
+    rectDrawing_  = false;
+    polyVerts_.clear();
+    update();
+    switch (tool) {
+        case Stage3DTool::OrbitCamera: setCursor(Qt::ArrowCursor);      break;
+        case Stage3DTool::Select:      setCursor(Qt::ArrowCursor);      break;
+        case Stage3DTool::DrawRect:    setCursor(Qt::CrossCursor);      break;
+        case Stage3DTool::DrawPolygon: setCursor(Qt::CrossCursor);      break;
+    }
+}
+
+void Stage3DView::setSelectedObject(int id) { selectedObjectId_ = id; update(); }
+
+void Stage3DView::setCalibRectVisible(bool visible)
+{
+    calibRectVisible_ = visible;
+    update();
+}
+
+void Stage3DView::setCameraMarker(QVector3D pos, float fovDeg, bool visible)
+{
+    cameraMarkerPos_    = pos;
+    cameraMarkerFov_    = fovDeg;
+    cameraMarkerVisible_= visible;
+    update();
+}
+
+Stage3DCameraState Stage3DView::getCameraState() const
+{
+    return {camCenter_.x(), camCenter_.y(), camCenter_.z(), camYaw_, camPitch_, camDist_};
+}
+
+void Stage3DView::setCameraState(const Stage3DCameraState& s)
+{
+    camCenter_ = QVector3D(s.centerX, s.centerY, s.centerZ);
+    camYaw_    = s.yaw;
+    camPitch_  = s.pitch;
+    camDist_   = s.dist;
+    update();
+}
+
+void Stage3DView::applyCameraPreset(CameraPreset preset)
+{
+    switch (preset) {
+        case CameraPreset::Top:      camYaw_ =   0; camPitch_ = 89.0f; camDist_ = 15; break;
+        case CameraPreset::Front:    camYaw_ =   0; camPitch_ =  8.0f; camDist_ = 15; break;
+        case CameraPreset::FrontTop: camYaw_ =   0; camPitch_ = 45.0f; camDist_ = 15; break;
+        case CameraPreset::Left:     camYaw_ = -90; camPitch_ =  8.0f; camDist_ = 15; break;
+        case CameraPreset::Right:    camYaw_ =  90; camPitch_ =  8.0f; camDist_ = 15; break;
+    }
+    update();
+}
+
+// ─── OpenGL ───────────────────────────────────────────────────────────────────
+
+void Stage3DView::initializeGL()
+{
+    initializeOpenGLFunctions();
+    connect(context(), &QOpenGLContext::aboutToBeDestroyed, this, &Stage3DView::cleanup, Qt::DirectConnection);
+
+    shader_ = new QOpenGLShaderProgram();
+    initShaders();
+
+    vao_.create();
+    vbo_.create();
+    vbo_.setUsagePattern(QOpenGLBuffer::DynamicDraw);
+
+    buildGridGeometry();
+
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LEQUAL);
+    glLineWidth(1.0f);
+}
+
+void Stage3DView::initShaders()
+{
+    shader_->addShaderFromSourceCode(QOpenGLShader::Vertex,   kVertSrc);
+    shader_->addShaderFromSourceCode(QOpenGLShader::Fragment, kFragSrc);
+    shader_->link();
+}
+
+void Stage3DView::buildGridGeometry()
+{
+    gridVerts_.clear();
+    const float range = 20.0f;
+    const float step  = 1.0f;
+    for (float v = -range; v <= range + 0.001f; v += step) {
+        gridVerts_ << QVector3D(-range, 0, v) << QVector3D(range, 0, v);
+        gridVerts_ << QVector3D(v, 0, -range) << QVector3D(v, 0,  range);
+    }
+}
+
+void Stage3DView::resizeGL(int w, int h)
+{
+    viewW_ = w ? w : 1;
+    viewH_ = h ? h : 1;
+    glViewport(0, 0, w, h);
+}
+
+void Stage3DView::paintGL()
+{
+    glClearColor(0.13f, 0.13f, 0.15f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+    shader_->bind();
+
+    glDisable(GL_BLEND);
+    drawGrid();
+    drawCalibRect();
+
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    drawStageObjects();
+
+    glDisable(GL_BLEND);
+    drawTrackers();
+    drawDrawingPreview();
+    drawCameraMarker();
+
+    shader_->release();
+
+    // 2D gizmo overlay — drawn via QPainter at the end of paintGL so it
+    // composites reliably on top of the GL content on all platforms.
+    QPainter p(this);
+    p.setRenderHint(QPainter::Antialiasing);
+    drawGizmoOverlay(p);
+}
+
+void Stage3DView::paintEvent(QPaintEvent* e)
+{
+    QOpenGLWidget::paintEvent(e);
+}
+
+// ─── Camera math ─────────────────────────────────────────────────────────────
+
+QVector3D Stage3DView::cameraPos() const
+{
+    const float yawRad   = qDegreesToRadians(camYaw_);
+    const float pitchRad = qDegreesToRadians(camPitch_);
+    return camCenter_ + QVector3D(
+        camDist_ * std::cos(pitchRad) * std::sin(yawRad),
+        camDist_ * std::sin(pitchRad),  // negative = above
+        camDist_ * std::cos(pitchRad) * std::cos(yawRad)
+    );
+}
+
+QMatrix4x4 Stage3DView::mvpMatrix() const
+{
+    QMatrix4x4 proj, view;
+    proj.perspective(45.0f, float(viewW_) / float(viewH_), 0.1f, 300.0f);
+    const QVector3D eye = cameraPos();
+    QVector3D up(0, 1, 0);
+    // Avoid gimbal at exactly ±90°: use the horizontal-forward direction as up
+    if (std::abs(camPitch_) > 88.0f)
+        up = QVector3D(-std::sin(qDegreesToRadians(camYaw_)), 0,
+                       -std::cos(qDegreesToRadians(camYaw_)));
+    view.lookAt(eye, camCenter_, up);
+    return proj * view;
+}
+
+bool Stage3DView::unprojectToHeight(QPoint screenPt, float y, QPointF& out) const
+{
+    // Build inverse MVP
+    QMatrix4x4 mvp = mvpMatrix();
+    bool ok;
+    QMatrix4x4 inv = mvp.inverted(&ok);
+    if (!ok) return false;
+
+    // Normalised device coords
+    float ndcX = (2.0f * screenPt.x() / viewW_) - 1.0f;
+    float ndcY = 1.0f - (2.0f * screenPt.y() / viewH_);
+
+    QVector4D near4 = inv * QVector4D(ndcX, ndcY, -1.0f, 1.0f);
+    QVector4D far4  = inv * QVector4D(ndcX, ndcY,  1.0f, 1.0f);
+    if (std::abs(near4.w()) < 1e-7f || std::abs(far4.w()) < 1e-7f) return false;
+
+    QVector3D nearPt = near4.toVector3DAffine();
+    QVector3D farPt  = far4.toVector3DAffine();
+    QVector3D dir    = farPt - nearPt;
+
+    if (std::abs(dir.y()) < 1e-7f) return false;
+    float t = (y - nearPt.y()) / dir.y();
+    QVector3D hit = nearPt + t * dir;
+    out = QPointF(hit.x(), hit.z());
+    return true;
+}
+
+// ─── Pick ─────────────────────────────────────────────────────────────────────
+
+int Stage3DView::pickObject(QPoint screenPt)
+{
+    QPointF stageXZ;
+    if (!unprojectToHeight(screenPt, 0.0f, stageXZ)) return -1;
+
+    for (const auto& obj : stageObjects_) {
+        // System objects (camera, calib rect) and stage outlines are not pickable
+        if (obj.id < 0 || obj.isStageOutline) continue;
+        if (obj.polygon.containsPoint(stageXZ, Qt::OddEvenFill))
+            return obj.id;
+    }
+    return -1;
+}
+
+// ─── Draw helpers ─────────────────────────────────────────────────────────────
+
+void Stage3DView::drawPrimitive(GLenum mode, const QVector<QVector3D>& verts,
+                                 const QColor& color, float alpha)
+{
+    if (verts.isEmpty()) return;
+
+    vao_.bind();
+    vbo_.bind();
+    vbo_.allocate(verts.constData(), int(verts.size() * sizeof(QVector3D)));
+
+    shader_->setAttributeBuffer(0, GL_FLOAT, 0, 3, sizeof(QVector3D));
+    shader_->enableAttributeArray(0);
+
+    QMatrix4x4 mvp = mvpMatrix();
+    shader_->setUniformValue("uMVP", mvp);
+    shader_->setUniformValue("uColor",
+        QVector4D(color.redF(), color.greenF(), color.blueF(),
+                  alpha < 0.0f ? color.alphaF() : alpha));
+
+    glDrawArrays(mode, 0, verts.size());
+
+    shader_->disableAttributeArray(0);
+    vbo_.release();
+    vao_.release();
+}
+
+void Stage3DView::drawPrimitiveEx(GLenum mode, const QVector<QVector3D>& verts,
+                                   const QColor& color, float alpha, const QMatrix4x4& mvp)
+{
+    if (verts.isEmpty()) return;
+
+    vao_.bind();
+    vbo_.bind();
+    vbo_.allocate(verts.constData(), int(verts.size() * sizeof(QVector3D)));
+
+    shader_->setAttributeBuffer(0, GL_FLOAT, 0, 3, sizeof(QVector3D));
+    shader_->enableAttributeArray(0);
+
+    shader_->setUniformValue("uMVP", mvp);
+    shader_->setUniformValue("uColor",
+        QVector4D(color.redF(), color.greenF(), color.blueF(), alpha));
+
+    glDrawArrays(mode, 0, verts.size());
+
+    shader_->disableAttributeArray(0);
+    vbo_.release();
+    vao_.release();
+}
+
+void Stage3DView::drawGizmoOverlay(QPainter& p) const
+{
+    const int size   = 64;
+    const int margin = 10;
+    const int cx = margin + size / 2;
+    const int cy = height() - margin - size / 2;
+
+    const float yawRad   = qDegreesToRadians(camYaw_);
+    const float pitchRad = qDegreesToRadians(camPitch_);
+    QVector3D eye(std::cos(pitchRad) * std::sin(yawRad),
+                  std::sin(pitchRad),
+                  std::cos(pitchRad) * std::cos(yawRad));
+    eye *= 3.0f;
+    QVector3D up(0, 1, 0);
+    if (std::abs(camPitch_) > 88.0f)
+        up = QVector3D(-std::sin(yawRad), 0, -std::cos(yawRad));
+
+    QMatrix4x4 proj, view;
+    proj.perspective(45.0f, 1.0f, 0.1f, 10.0f);
+    view.lookAt(eye, QVector3D(0, 0, 0), up);
+    const QMatrix4x4 gizmoMVP = proj * view;
+
+    auto project = [&](QVector3D v) -> QPointF {
+        QVector4D clip = gizmoMVP * QVector4D(v, 1.0f);
+        if (qAbs(clip.w()) < 1e-7f) return QPointF(cx, cy);
+        QVector3D ndc = clip.toVector3DAffine();
+        return QPointF(cx + ndc.x() * size / 2.0f,
+                       cy - ndc.y() * size / 2.0f);
+    };
+
+    // Background box
+    p.setPen(Qt::NoPen);
+    p.setBrush(QColor(0, 0, 0, 130));
+    p.drawRoundedRect(QRectF(margin, height() - margin - size, size, size), 5, 5);
+
+    const float len = 0.75f;
+    QPointF orig = project({0, 0, 0});
+
+    struct Axis { QVector3D dir; QColor color; QString label; };
+    const Axis axes[] = {
+        {{len,0,0}, QColor(210,60,60),  "X"},
+        {{0,len,0}, QColor(60,200,60),  "Y"},
+        {{0,0,len}, QColor(60,100,220), "Z"},
+    };
+
+    for (const auto& ax : axes) {
+        QPointF tip = project(ax.dir);
+        p.setPen(QPen(ax.color, 2));
+        p.drawLine(orig, tip);
+        // arrowhead
+        QPointF d = tip - orig;
+        double dlen = std::sqrt(d.x()*d.x() + d.y()*d.y());
+        if (dlen > 2.0) {
+            d /= dlen;
+            QPointF perp(-d.y(), d.x());
+            const double head = 5.0;
+            p.drawLine(tip, tip - d * head + perp * head * 0.45);
+            p.drawLine(tip, tip - d * head - perp * head * 0.45);
+        }
+        p.setFont(QFont("Arial", 7, QFont::Bold));
+        p.drawText(tip + QPointF(2, 3), ax.label);
+    }
+
+    p.setPen(Qt::NoPen);
+    p.setBrush(QColor(210, 210, 210));
+    p.drawEllipse(orig, 3, 3);
+}
+
+void Stage3DView::drawCameraMarker()
+{
+    if (!cameraMarkerVisible_) return;
+    const float x = cameraMarkerPos_.x();
+    const float y = cameraMarkerPos_.y();
+    const float z = cameraMarkerPos_.z();
+
+    const float s = 0.25f;
+    QVector<QVector3D> cross = {
+        {x-s, y, z}, {x+s, y, z},
+        {x, y, z-s}, {x, y, z+s},
+        {x, y-s, z}, {x, y+s, z},
+    };
+    const QColor camColor(255, 200, 50);
+    glLineWidth(2.0f);
+    drawPrimitive(GL_LINES, cross, camColor);
+    glLineWidth(1.0f);
+
+    // Draw lines from camera toward the calibration stage points (FOV lines)
+    if (calibStagePoints_.size() >= 2) {
+        QVector<QVector3D> fovLines;
+        QList<QPointF> sorted = calibStagePoints_;
+        if (sorted.size() >= 3) {
+            QPointF c;
+            for (const auto& pt : sorted) c += pt;
+            c /= sorted.size();
+            std::sort(sorted.begin(), sorted.end(), [c](const QPointF& a, const QPointF& b) {
+                return std::atan2(a.y()-c.y(), a.x()-c.x()) < std::atan2(b.y()-c.y(), b.x()-c.x());
+            });
+        }
+        for (const auto& pt : sorted)
+            fovLines << QVector3D(x, y, z) << QVector3D(float(pt.x()), 0, float(pt.y()));
+        drawPrimitive(GL_LINES, fovLines, QColor(255, 200, 50, 100), 0.4f);
+    }
+}
+
+void Stage3DView::drawGrid()
+{
+    drawPrimitive(GL_LINES, gridVerts_, QColor(60, 62, 68));
+    // Draw axes
+    QVector<QVector3D> axes = {
+        {0,0,0}, {1,0,0},   // X red
+        {0,0,0}, {0,1,0},   // Y green
+        {0,0,0}, {0,0,1},   // Z blue
+    };
+    QVector<QVector3D> axX = {axes[0], axes[1]};
+    QVector<QVector3D> axY = {axes[2], axes[3]};
+    QVector<QVector3D> axZ = {axes[4], axes[5]};
+    drawPrimitive(GL_LINES, axX, QColor(200, 60, 60));
+    drawPrimitive(GL_LINES, axY, QColor(60, 200, 60));
+    drawPrimitive(GL_LINES, axZ, QColor(60, 60, 200));
+}
+
+void Stage3DView::drawCalibRect()
+{
+    if (!calibRectVisible_) return;
+    if (calibStagePoints_.size() < 2) return;
+
+    // Sort points by angle around centroid so they form a proper outline (no crossed lines)
+    QList<QPointF> sorted = calibStagePoints_;
+    if (sorted.size() >= 3) {
+        QPointF c;
+        for (const auto& p : sorted) c += p;
+        c /= sorted.size();
+        std::sort(sorted.begin(), sorted.end(), [c](const QPointF& a, const QPointF& b) {
+            return std::atan2(a.y() - c.y(), a.x() - c.x())
+                 < std::atan2(b.y() - c.y(), b.x() - c.x());
+        });
+    }
+
+    QVector<QVector3D> lines;
+    const int n = sorted.size();
+    for (int i = 0; i < n; ++i) {
+        const QPointF& a = sorted[i];
+        const QPointF& b = sorted[(i + 1) % n];
+        lines << QVector3D(a.x(), 0, a.y()) << QVector3D(b.x(), 0, b.y());
+    }
+    drawPrimitive(GL_LINES, lines, QColor(255, 180, 0));
+}
+
+QVector<QVector3D> Stage3DView::triangulatePolygon(const QPolygonF& poly, float y) const
+{
+    QVector<QVector3D> verts;
+    if (poly.size() < 3) return verts;
+    // Fan from vertex 0
+    for (int i = 1; i + 1 < poly.size(); ++i) {
+        verts << QVector3D(poly[0].x(), y, poly[0].y());
+        verts << QVector3D(poly[i].x(), y, poly[i].y());
+        verts << QVector3D(poly[i+1].x(), y, poly[i+1].y());
+    }
+    return verts;
+}
+
+QVector<QVector3D> Stage3DView::extrudePolygonSides(const QPolygonF& poly,
+                                                      float yBottom, float yTop) const
+{
+    QVector<QVector3D> verts;
+    const int n = poly.size();
+    if (n < 2) return verts;
+    for (int i = 0; i < n; ++i) {
+        const QPointF& a = poly[i];
+        const QPointF& b = poly[(i + 1) % n];
+        // Two triangles per side
+        verts << QVector3D(a.x(), yBottom, a.y());
+        verts << QVector3D(b.x(), yBottom, b.y());
+        verts << QVector3D(b.x(), yTop,    b.y());
+
+        verts << QVector3D(a.x(), yBottom, a.y());
+        verts << QVector3D(b.x(), yTop,    b.y());
+        verts << QVector3D(a.x(), yTop,    a.y());
+    }
+    return verts;
+}
+
+void Stage3DView::drawStageObjects()
+{
+    for (const auto& obj : stageObjects_) {
+        if (!obj.visibleIn3D) continue;
+        if (obj.polygon.isEmpty()) continue;
+
+        bool selected = (obj.id == selectedObjectId_);
+
+        if (obj.isStageOutline) {
+            // Floor-level boundary only — no height extrusion
+            QVector<QVector3D> wireLines;
+            const auto& poly = obj.polygon;
+            const int n = poly.size();
+            for (int i = 0; i < n; ++i) {
+                const QPointF& a = poly[i];
+                const QPointF& b = poly[(i+1) % n];
+                wireLines << QVector3D(a.x(), 0, a.y()) << QVector3D(b.x(), 0, b.y());
+            }
+            glLineWidth(2.0f);
+            drawPrimitive(GL_LINES, wireLines, selected ? QColor(255, 220, 60) : obj.color.lighter(160));
+            glLineWidth(1.0f);
+            continue;
+        }
+
+        QColor fill  = obj.color;
+        QColor edge  = fill.lighter(150);
+
+        // Top face (semi-transparent fill)
+        auto topFace = triangulatePolygon(obj.polygon, obj.height);
+        drawPrimitive(GL_TRIANGLES, topFace, fill, fill.alphaF() * 0.7f);
+
+        // Side walls
+        auto sides = extrudePolygonSides(obj.polygon, 0.0f, obj.height);
+        drawPrimitive(GL_TRIANGLES, sides, fill, fill.alphaF() * 0.4f);
+
+        // Wireframe edges (top + sides + bottom)
+        glDisable(GL_BLEND);
+        QVector<QVector3D> wireLines;
+        const auto& poly = obj.polygon;
+        const int n = poly.size();
+        for (int i = 0; i < n; ++i) {
+            const QPointF& a = poly[i];
+            const QPointF& b = poly[(i + 1) % n];
+            wireLines << QVector3D(a.x(), obj.height, a.y()) << QVector3D(b.x(), obj.height, b.y());
+            wireLines << QVector3D(a.x(), 0,          a.y()) << QVector3D(b.x(), 0,          b.y());
+            wireLines << QVector3D(a.x(), 0, a.y()) << QVector3D(a.x(), obj.height, a.y());
+        }
+        drawPrimitive(GL_LINES, wireLines, selected ? QColor(255, 220, 60) : edge);
+        if (selected)
+            drawPrimitive(GL_LINES, wireLines, QColor(255, 220, 60));
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    }
+}
+
+void Stage3DView::drawTrackers()
+{
+    for (auto it = trackerPositions_.constBegin(); it != trackerPositions_.constEnd(); ++it) {
+        const int id = it.key();
+        const float x = it.value().first;
+        const float z = it.value().second;
+
+        // Find stage height at this position (platform objects only)
+        float y = 0.0f;
+        for (const auto& obj : stageObjects_)
+            if (!obj.isStageOutline && obj.polygon.containsPoint({x, z}, Qt::OddEvenFill))
+                { y = obj.height; break; }
+
+        QColor color = Qt::white;
+        for (const auto& t : trackers_)
+            if (t.id == id) { color = t.color; break; }
+
+        // Draw a small cross / diamond marker
+        const float s = 0.15f;
+        QVector<QVector3D> cross = {
+            {x-s, y, z}, {x+s, y, z},
+            {x, y, z-s}, {x, y, z+s},
+            {x, y-s, z}, {x, y+s, z},
+        };
+        drawPrimitive(GL_LINES, cross, color);
+    }
+}
+
+QPolygonF Stage3DView::rectToPolygon(QPointF center, float width, float depth, float rotDeg) const
+{
+    const float hw = width / 2.0f;
+    const float hd = depth / 2.0f;
+    const float cosA = std::cos(qDegreesToRadians(rotDeg));
+    const float sinA = std::sin(qDegreesToRadians(rotDeg));
+    QPolygonF p;
+    for (auto [lx, lz] : QList<QPair<float,float>>{
+            {-hw, -hd}, {hw, -hd}, {hw, hd}, {-hw, hd}}) {
+        p << QPointF(center.x() + lx * cosA - lz * sinA,
+                     center.y() + lx * sinA + lz * cosA);
+    }
+    return p;
+}
+
+void Stage3DView::drawDrawingPreview()
+{
+    if (activeTool_ == Stage3DTool::DrawRect && rectDrawing_) {
+        QPointF c = QPointF((rectStart_.x() + rectCurrent_.x()) / 2.0f,
+                            (rectStart_.y() + rectCurrent_.y()) / 2.0f);
+        float w = std::abs(float(rectCurrent_.x() - rectStart_.x()));
+        float d = std::abs(float(rectCurrent_.y() - rectStart_.y()));
+        QPolygonF poly = rectToPolygon(c, std::max(w, 0.01f), std::max(d, 0.01f), 0.0f);
+        QVector<QVector3D> lines;
+        for (int i = 0; i < poly.size(); ++i) {
+            const QPointF& a = poly[i];
+            const QPointF& b = poly[(i+1) % poly.size()];
+            lines << QVector3D(a.x(), 0, a.y()) << QVector3D(b.x(), 0, b.y());
+        }
+        drawPrimitive(GL_LINES, lines, QColor(255, 255, 100));
+    }
+
+    if (activeTool_ == Stage3DTool::DrawPolygon && !polyVerts_.isEmpty()) {
+        QVector<QVector3D> lines;
+        for (int i = 0; i + 1 < polyVerts_.size(); ++i)
+            lines << QVector3D(polyVerts_[i].x(), 0, polyVerts_[i].y())
+                  << QVector3D(polyVerts_[i+1].x(), 0, polyVerts_[i+1].y());
+        // Line to cursor
+        lines << QVector3D(polyVerts_.last().x(), 0, polyVerts_.last().y())
+              << QVector3D(polyCurrent_.x(), 0, polyCurrent_.y());
+        drawPrimitive(GL_LINES, lines, QColor(255, 255, 100));
+
+        // Dots for each vertex
+        for (const QPointF& v : polyVerts_) {
+            const float s = 0.08f;
+            QVector<QVector3D> cross = {
+                {float(v.x())-s, 0, float(v.y())}, {float(v.x())+s, 0, float(v.y())},
+                {float(v.x()), 0, float(v.y())-s}, {float(v.x()), 0, float(v.y())+s},
+            };
+            drawPrimitive(GL_LINES, cross, QColor(255, 255, 100));
+        }
+    }
+}
+
+// ─── Mouse / keyboard events ─────────────────────────────────────────────────
+
+void Stage3DView::mousePressEvent(QMouseEvent* e)
+{
+    lastMousePos_ = e->pos();
+    isDragging_   = false;
+
+    if (activeTool_ == Stage3DTool::OrbitCamera) {
+        isDragging_ = true;
+    } else if (activeTool_ == Stage3DTool::DrawRect && e->button() == Qt::LeftButton) {
+        QPointF stageXZ;
+        if (unprojectToHeight(e->pos(), 0.0f, stageXZ)) {
+            rectStart_   = stageXZ;
+            rectCurrent_ = stageXZ;
+            rectDrawing_ = true;
+        }
+    } else if (activeTool_ == Stage3DTool::DrawPolygon && e->button() == Qt::LeftButton) {
+        QPointF stageXZ;
+        if (unprojectToHeight(e->pos(), 0.0f, stageXZ))
+            polyVerts_ << stageXZ;
+        update();
+    }
+}
+
+void Stage3DView::mouseMoveEvent(QMouseEvent* e)
+{
+    const QPoint delta = e->pos() - lastMousePos_;
+    lastMousePos_ = e->pos();
+
+    if (activeTool_ == Stage3DTool::OrbitCamera && isDragging_) {
+        if (e->buttons() & Qt::LeftButton &&
+            !(e->modifiers() & Qt::ControlModifier)) {
+            // Convention: drag right = clockwise rotation from above (stage-right
+            // swings toward the camera). Negating delta.x achieves this uniformly
+            // at every yaw angle with no discontinuity.
+            camYaw_   -= delta.x() * 0.5f;
+            camPitch_ -= delta.y() * 0.5f;
+            camPitch_  = qBound(0.0f, camPitch_, 89.0f);
+        } else if ((e->buttons() & Qt::RightButton) ||
+                   ((e->buttons() & Qt::LeftButton) && (e->modifiers() & Qt::ControlModifier))) {
+            // Pan
+            const float yawRad = qDegreesToRadians(camYaw_);
+            const float speed  = camDist_ * 0.003f;
+            QVector3D right( std::cos(yawRad), 0, -std::sin(yawRad));
+            QVector3D fwd  (-std::sin(yawRad), 0, -std::cos(yawRad));
+            camCenter_ -= right * float(delta.x()) * speed;
+            camCenter_ += fwd  * float(delta.y()) * speed;
+        }
+        update();
+    }
+
+    if (activeTool_ == Stage3DTool::DrawRect && rectDrawing_) {
+        QPointF stageXZ;
+        if (unprojectToHeight(e->pos(), 0.0f, stageXZ))
+            rectCurrent_ = stageXZ;
+        update();
+    }
+
+    if (activeTool_ == Stage3DTool::DrawPolygon) {
+        QPointF stageXZ;
+        if (unprojectToHeight(e->pos(), 0.0f, stageXZ))
+            polyCurrent_ = stageXZ;
+        update();
+    }
+}
+
+void Stage3DView::mouseReleaseEvent(QMouseEvent* e)
+{
+    isDragging_ = false;
+
+    if (activeTool_ == Stage3DTool::Select && e->button() == Qt::LeftButton) {
+        emit objectSelected(pickObject(e->pos()));
+    }
+
+    if (activeTool_ == Stage3DTool::DrawRect && e->button() == Qt::LeftButton && rectDrawing_) {
+        QPointF stageXZ;
+        if (unprojectToHeight(e->pos(), 0.0f, stageXZ))
+            rectCurrent_ = stageXZ;
+
+        rectDrawing_ = false;
+        float w = std::abs(float(rectCurrent_.x() - rectStart_.x()));
+        float d = std::abs(float(rectCurrent_.y() - rectStart_.y()));
+        if (w > 0.05f && d > 0.05f) {
+            QPointF center((rectStart_.x() + rectCurrent_.x()) / 2.0f,
+                           (rectStart_.y() + rectCurrent_.y()) / 2.0f);
+            emit rectDrawn(center, w, d);
+        }
+        update();
+    }
+}
+
+void Stage3DView::mouseDoubleClickEvent(QMouseEvent* e)
+{
+    if (activeTool_ == Stage3DTool::DrawPolygon && e->button() == Qt::LeftButton) {
+        if (polyVerts_.size() >= 3) {
+            QPolygonF poly;
+            for (const QPointF& v : polyVerts_) poly << v;
+            polyVerts_.clear();
+            emit polygonDrawn(poly);
+            update();
+        }
+    }
+}
+
+void Stage3DView::wheelEvent(QWheelEvent* e)
+{
+    const float factor = e->angleDelta().y() > 0 ? 0.85f : 1.15f;
+    camDist_ = qBound(0.5f, camDist_ * factor, 150.0f);
+    update();
+}
+
+void Stage3DView::keyPressEvent(QKeyEvent* e)
+{
+    if (activeTool_ == Stage3DTool::DrawPolygon) {
+        if (e->key() == Qt::Key_Return || e->key() == Qt::Key_Enter) {
+            if (polyVerts_.size() >= 3) {
+                QPolygonF poly;
+                for (const QPointF& v : polyVerts_) poly << v;
+                polyVerts_.clear();
+                emit polygonDrawn(poly);
+                update();
+            }
+        } else if (e->key() == Qt::Key_Escape) {
+            polyVerts_.clear();
+            update();
+        }
+    }
+    QOpenGLWidget::keyPressEvent(e);
+}

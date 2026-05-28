@@ -15,7 +15,12 @@
 #include "ui/StatsPanel.h"
 #include "ui/CalibrationPanel.h"
 #include "ui/SessionPanel.h"
+#include "ui/Stage3DPanel.h"
+#include "ui/StageItemsPanel.h"
+#include "ui/StagePropertiesPanel.h"
+#include <oclero/qlementine/style/ThemeManager.hpp>
 #include <QApplication>
+#include <QStyleHints>
 #include <QDockWidget>
 #include <QMenuBar>
 #include <QStatusBar>
@@ -33,6 +38,7 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QAction>
+#include <QActionGroup>
 #include <QEvent>
 #include <QSet>
 #include <QDateTime>
@@ -44,7 +50,11 @@ namespace {
 static constexpr bool kEnableIncomingPsn = true;
 }
 
-MainWindow::MainWindow(NdiReceiver* ndi, QWidget* parent) : QMainWindow(parent) {
+MainWindow::MainWindow(NdiReceiver* ndi,
+                       oclero::qlementine::ThemeManager* themeManager,
+                       QWidget* parent)
+    : QMainWindow(parent), themeManager_(themeManager)
+{
     setWindowTitle("OnPoint");
     resize(1440, 810);
 
@@ -66,7 +76,10 @@ MainWindow::MainWindow(NdiReceiver* ndi, QWidget* parent) : QMainWindow(parent) 
     sacnThread_->start();
     sessionMgr_   = new SessionManager(this);
 
-    sessionPanel_    = new SessionPanel(sessionMgr_);
+    sessionPanel_          = new SessionPanel(sessionMgr_);
+    stage3DPanel_          = new Stage3DPanel;
+    stageItemsPanel_       = new StageItemsPanel;
+    stagePropertiesPanel_  = new StagePropertiesPanel;
     streamPanel_     = new StreamSourcePanel(ndi_);
     calibrationPanel_= new CalibrationPanel(video_, ndi_, this);
     trackersPanel_   = new TrackersPanel;
@@ -121,8 +134,11 @@ MainWindow::MainWindow(NdiReceiver* ndi, QWidget* parent) : QMainWindow(parent) 
     trackersDock_    = makeDock("Trackers",       "dock_trackers",    trackersPanel_);
     networkDock_     = makeDock("Network",        "dock_network",     networkPanel_);
     statsDock_       = makeDock("Stats",          "dock_stats",       statsPanel_);
-    panelDocks_      = {sessionDock_, streamDock_, calibrationDock_,
-                        trackersDock_, networkDock_, statsDock_};
+    stage3DDock_          = makeDock("Stage 3D",              "dock_stage3d",          stage3DPanel_);
+    stageItemsDock_       = makeDock("Stage Objects",         "dock_stage_items",      stageItemsPanel_);
+    stagePropertiesDock_  = makeDock("Object Properties",     "dock_stage_properties", stagePropertiesPanel_);
+    panelDocks_           = {sessionDock_, streamDock_, calibrationDock_,
+                             trackersDock_, networkDock_, statsDock_};
 
     // Default layout: all 6 panels tabified on the right
     addDockWidget(Qt::RightDockWidgetArea, sessionDock_);
@@ -130,9 +146,166 @@ MainWindow::MainWindow(NdiReceiver* ndi, QWidget* parent) : QMainWindow(parent) 
         tabifyDockWidget(panelDocks_[0], d);
     streamDock_->raise();   // show "Stream Source" tab by default
 
+    // Stage 3D dock tabs alongside video on the left
+    addDockWidget(Qt::LeftDockWidgetArea, stage3DDock_);
+    tabifyDockWidget(videoDock_, stage3DDock_);
+    videoDock_->raise();  // keep video visible by default
+
+    // Stage objects dock: tabified with right panels
+    addDockWidget(Qt::RightDockWidgetArea, stageItemsDock_);
+    tabifyDockWidget(panelDocks_[0], stageItemsDock_);
+
+    // Object properties dock: tabified alongside stage objects
+    addDockWidget(Qt::RightDockWidgetArea, stagePropertiesDock_);
+    tabifyDockWidget(stageItemsDock_, stagePropertiesDock_);
+
     // Default sizing — overridden by saved state on subsequent launches
     resizeDocks({videoDock_},   {1160}, Qt::Horizontal);
     resizeDocks({sessionDock_}, {280},  Qt::Horizontal);
+
+    // ── Stage geometry signal wiring ──────────────────────────────────────
+    // 3D view: new rect drawn -> add platform
+    connect(stage3DPanel_, &Stage3DPanel::rectDrawn,
+            this, [this](QPointF center, float w, float d) {
+        StageObject obj;
+        obj.id = 1;
+        for (const auto& o : project_.stageObjects) obj.id = std::max(obj.id, o.id + 1);
+        obj.name = QString("Platform %1").arg(obj.id);
+        obj.isRect = true; obj.center = center; obj.width = w; obj.depth = d;
+        obj.rotation = 0; obj.height = 1.0f;
+        const float hw = w/2, hd = d/2;
+        obj.polygon << QPointF(center.x()-hw, center.y()-hd)
+                    << QPointF(center.x()+hw, center.y()-hd)
+                    << QPointF(center.x()+hw, center.y()+hd)
+                    << QPointF(center.x()-hw, center.y()+hd);
+        project_.stageObjects << obj;
+        syncAllStageObjects(); markDirty();
+        stage3DPanel_->setActiveTool(Stage3DTool::Select);
+        stage3DPanel_->setSelectedObject(obj.id);
+        stageItemsPanel_->setSelectedObject(obj.id);
+        stagePropertiesPanel_->setSelectedObject(obj.id);
+    });
+    connect(stage3DPanel_, &Stage3DPanel::polygonDrawn,
+            this, [this](QPolygonF poly) {
+        StageObject obj;
+        obj.id = 1;
+        for (const auto& o : project_.stageObjects) obj.id = std::max(obj.id, o.id + 1);
+        obj.name = QString("Platform %1").arg(obj.id);
+        obj.isRect = false; obj.height = 1.0f;
+        QRectF bb = poly.boundingRect();
+        obj.center = bb.center(); obj.width = float(bb.width()); obj.depth = float(bb.height());
+        obj.polygon = poly;
+        project_.stageObjects << obj;
+        syncAllStageObjects(); markDirty();
+        stage3DPanel_->setActiveTool(Stage3DTool::Select);
+        stage3DPanel_->setSelectedObject(obj.id);
+        stageItemsPanel_->setSelectedObject(obj.id);
+        stagePropertiesPanel_->setSelectedObject(obj.id);
+    });
+
+    // 3D view: object clicked
+    connect(stage3DPanel_, &Stage3DPanel::objectSelected, this, [this](int id) {
+        stageItemsPanel_->setSelectedObject(id);
+        stagePropertiesPanel_->setSelectedObject(id);
+        stage3DPanel_->setSelectedObject(id);
+    });
+
+    // Items panel: selection changed
+    connect(stageItemsPanel_, &StageItemsPanel::selectionChanged, this, [this](int id) {
+        stage3DPanel_->setSelectedObject(id);
+        stagePropertiesPanel_->setSelectedObject(id);
+    });
+
+    // Items panel: request draw / add tools
+    connect(stageItemsPanel_, &StageItemsPanel::addRectRequested, this, [this]() {
+        stage3DDock_->raise(); stage3DPanel_->setActiveTool(Stage3DTool::DrawRect);
+    });
+    connect(stageItemsPanel_, &StageItemsPanel::addPolygonRequested, this, [this]() {
+        stage3DDock_->raise(); stage3DPanel_->setActiveTool(Stage3DTool::DrawPolygon);
+    });
+    connect(stageItemsPanel_, &StageItemsPanel::addStageOutlineRequested, this, [this]() {
+        StageObject obj;
+        obj.id = 1;
+        for (const auto& o : project_.stageObjects) obj.id = std::max(obj.id, o.id + 1);
+        obj.name = "Stage Outline";
+        obj.isRect = true;
+        obj.isStageOutline = true;
+        obj.center = {0.0, 0.0};
+        obj.width = 10.0f; obj.depth = 6.0f; obj.rotation = 0.0f; obj.height = 0.0f;
+        obj.polygon << QPointF(-5, -3) << QPointF(5, -3)
+                    << QPointF(5, 3)   << QPointF(-5, 3);
+        project_.stageObjects << obj;
+        syncAllStageObjects(); markDirty();
+        stage3DPanel_->setSelectedObject(obj.id);
+        stageItemsPanel_->setSelectedObject(obj.id);
+        stagePropertiesPanel_->setSelectedObject(obj.id);
+    });
+
+    // Items panel: delete
+    connect(stageItemsPanel_, &StageItemsPanel::deleteRequested,
+            this, [this](int id) {
+        project_.stageObjects.removeIf([id](const StageObject& o){ return o.id == id; });
+        syncAllStageObjects(); markDirty();
+        stage3DPanel_->setSelectedObject(-1);
+        stageItemsPanel_->setSelectedObject(-999);
+        stagePropertiesPanel_->setSelectedObject(-999);
+    });
+
+    // Items panel: duplicate
+    connect(stageItemsPanel_, &StageItemsPanel::duplicateRequested,
+            this, [this](int id) {
+        const StageObject* src = nullptr;
+        for (const auto& o : project_.stageObjects)
+            if (o.id == id) { src = &o; break; }
+        if (!src) return;
+
+        StageObject copy = *src;
+        copy.id = 1;
+        for (const auto& o : project_.stageObjects) copy.id = std::max(copy.id, o.id + 1);
+        copy.name = src->name + " Copy";
+        const QPointF offset(0.5, 0.5);
+        copy.center += offset;
+        QPolygonF moved;
+        for (const QPointF& v : copy.polygon) moved << (v + offset);
+        copy.polygon = moved;
+
+        project_.stageObjects << copy;
+        syncAllStageObjects(); markDirty();
+        stage3DPanel_->setSelectedObject(copy.id);
+        stageItemsPanel_->setSelectedObject(copy.id);
+        stagePropertiesPanel_->setSelectedObject(copy.id);
+    });
+
+    // Properties panel: object edited via properties form
+    connect(stagePropertiesPanel_, &StagePropertiesPanel::objectEdited,
+            this, [this](const StageObject& edited) {
+        if (edited.id == -1) {
+            // Camera: only the FOV is user-editable
+            project_.calibrationView.cameraFovDeg = edited.fovDeg;
+            syncAllStageObjects(); markDirty();
+            return;
+        }
+        for (auto& o : project_.stageObjects) {
+            if (o.id == edited.id) { o = edited; break; }
+        }
+        syncAllStageObjects(); markDirty();
+    });
+
+    // Items panel: vid / 3D visibility toggled
+    connect(stageItemsPanel_, &StageItemsPanel::visibilityChanged,
+            this, [this](int id, bool inVideo, bool in3D) {
+        if (id == -1) {
+            project_.calibrationView.showCameraIn3D = in3D;
+        } else if (id == -2) {
+            project_.calibrationView.showCalibRectInVideo = inVideo;
+            project_.calibrationView.showCalibRectIn3D    = in3D;
+        } else {
+            for (auto& o : project_.stageObjects) {
+                if (o.id == id) { o.visibleInVideo = inVideo; o.visibleIn3D = in3D; break; }
+            }
+        }
+        syncAllStageObjects(); markDirty();
+    });
 
     // ── Status bar ────────────────────────────────────────────────────────
     auto makeSep = []() {
@@ -278,7 +451,10 @@ MainWindow::MainWindow(NdiReceiver* ndi, QWidget* parent) : QMainWindow(parent) 
             if (cal.is3DValid())
                 calibration_.projectionFromList(cal.projectionMatrix);
             video_->setCalibration(&calibration_);
+            stage3DPanel_->setCalibration(&calibration_, cal.stagePoints);
+            video_->setCalibStagePoints(cal.stagePoints);
         }
+        syncAllStageObjects();   // recomputes camera position from new calibration
         updateCalibStatus();
         if (sessionMgr_->state() == SessionManager::State::Hosting ||
             (sessionMgr_->state() == SessionManager::State::Joined &&
@@ -498,8 +674,37 @@ MainWindow::MainWindow(NdiReceiver* ndi, QWidget* parent) : QMainWindow(parent) 
         viewMenu->addAction(d->toggleViewAction());
     viewMenu->addSeparator();
     viewMenu->addAction(videoDock_->toggleViewAction());
+    viewMenu->addAction(stage3DDock_->toggleViewAction());
+    viewMenu->addAction(stageItemsDock_->toggleViewAction());
+    viewMenu->addAction(stagePropertiesDock_->toggleViewAction());
     viewMenu->addSeparator();
     auto* actResetLayout = viewMenu->addAction("Reset Layout");
+
+    viewMenu->addSeparator();
+    auto* appearanceMenu = viewMenu->addMenu("Appearance");
+    auto* themeGroup     = new QActionGroup(this);
+    themeGroup->setExclusive(true);
+    auto* actSystem = appearanceMenu->addAction("System (follow OS)");
+    auto* actDark   = appearanceMenu->addAction("Dark");
+    auto* actLight  = appearanceMenu->addAction("Light");
+    for (auto* a : {actSystem, actDark, actLight}) {
+        a->setCheckable(true);
+        themeGroup->addAction(a);
+    }
+
+    {
+        QSettings s("onpoint", "onpoint");
+        const QString saved = s.value("theme", "system").toString();
+        if      (saved == "dark")  actDark->setChecked(true);
+        else if (saved == "light") actLight->setChecked(true);
+        else                       actSystem->setChecked(true);
+        applyTheme(saved);
+    }
+
+    connect(actSystem, &QAction::triggered, this, [this]() { applyTheme("system"); });
+    connect(actDark,   &QAction::triggered, this, [this]() { applyTheme("dark"); });
+    connect(actLight,  &QAction::triggered, this, [this]() { applyTheme("light"); });
+
     connect(actResetLayout, &QAction::triggered, this, [this]() {
         QSettings s("onpoint", "onpoint");
         s.remove("windowGeometry");
@@ -530,6 +735,12 @@ MainWindow::MainWindow(NdiReceiver* ndi, QWidget* parent) : QMainWindow(parent) 
         dlg.exec();
     });
 
+    // Reapply system theme when OS dark/light mode changes (only in "system" mode).
+    connect(qApp->styleHints(), &QStyleHints::colorSchemeChanged,
+            this, [this](Qt::ColorScheme) {
+        if (currentTheme_ == "system") applyTheme("system");
+    });
+
     loadProject(Project::defaultProject());
     updateSessionStatus();
 }
@@ -557,9 +768,15 @@ void MainWindow::applyPlaneHeight(float h) {
     clickPlaneHeight_ = h;
     project_.calibrationView.clickPlaneHeight = h;
     video_->setClickPlaneHeight(h);
-    psnSender_->setOutputHeight(h);
     calibrationPanel_->setPlaneHeight(h);
     markDirty();
+}
+
+float MainWindow::stageHeightAt(float x, float z) const {
+    for (const auto& obj : project_.stageObjects)
+        if (obj.polygon.containsPoint({x, z}, Qt::OddEvenFill))
+            return obj.height;
+    return 0.0f;
 }
 
 
@@ -764,14 +981,18 @@ void MainWindow::applyProject() {
                 .arg(h[3],0,'g',6).arg(h[4],0,'g',6).arg(h[5],0,'g',6)
                 .arg(h[6],0,'g',6).arg(h[7],0,'g',6).arg(h[8],0,'g',6));
         calibrationPanel_->setCalibration(project_.calibration);
+        stage3DPanel_->setCalibration(&calibration_, project_.calibration.stagePoints);
+        video_->setCalibStagePoints(project_.calibration.stagePoints);
     }
+    syncAllStageObjects();
+    stage3DPanel_->setCameraState(project_.stage3dCamera);
     const auto& cv = project_.calibrationView;
     calibrationPanel_->setViewSettings(cv.showFloorGrid, cv.clickPlaneHeight, cv.showClickPlane);
     clickPlaneHeight_ = cv.clickPlaneHeight;
     video_->setClickPlaneHeight(cv.clickPlaneHeight);
     video_->setShowFloorGrid(cv.showFloorGrid);
     video_->setShowClickPlane(cv.showClickPlane);
-    psnSender_->setOutputHeight(cv.clickPlaneHeight);
+    video_->setCalibBoundaryVisible(cv.showCalibRectInVideo);
     sacnLastReceivedMs_ = -1;
     statusSacnIn_->setVisible(project_.network.sacnInput.enabled);
     statusSacnIn_->setText("● sACN In");
@@ -842,8 +1063,13 @@ void MainWindow::onTimer() {
 
     video_->setOwnPositions(trackerPositions_, project_.trackers);
     video_->setOwnRawPositions(trackerRawPositions_);
-    if (!trackerPositions_.isEmpty())
-        psnSender_->sendPositions(trackerPositions_, project_.trackers);
+    if (!trackerPositions_.isEmpty()) {
+        QMap<int, float> heights;
+        for (auto it = trackerPositions_.constBegin(); it != trackerPositions_.constEnd(); ++it)
+            heights[it.key()] = stageHeightAt(it.value().first, it.value().second) + clickPlaneHeight_;
+        psnSender_->sendPositions(trackerPositions_, project_.trackers, heights);
+    }
+    stage3DPanel_->setTrackerPositions(trackerPositions_, project_.trackers);
     frameCount_++;
 }
 
@@ -1033,6 +1259,7 @@ void MainWindow::onOpenProject() {
 
 void MainWindow::onSaveProject() {
     if (projectPath_.isEmpty()) { onSaveProjectAs(); return; }
+    project_.stage3dCamera = stage3DPanel_->getCameraState();
     project_.save(projectPath_);
     updateWindowTitle();
     markSaved();
@@ -1051,6 +1278,7 @@ void MainWindow::onSaveProjectAs() {
         "OnPoint Projects (*.onpoint)", nullptr, opts);
     if (path.isEmpty()) return;
     projectPath_ = path;
+    project_.stage3dCamera = stage3DPanel_->getCameraState();
     project_.save(path);
     saveRecent(path);
     updateWindowTitle();
@@ -1069,4 +1297,95 @@ void MainWindow::saveRecent(const QString& path) {
 QStringList MainWindow::recentProjects() const {
     QSettings s("onpoint", "onpoint");
     return s.value("recentProjects").toStringList();
+}
+
+void MainWindow::updateCameraPosition()
+{
+    if (calibration_.has3D()) {
+        // 3D calibration: camera centre comes from the projection matrix, FOV is irrelevant
+        cameraPos3D_   = calibration_.cameraCenter3D();
+        camera3DValid_ = true;
+    } else if (calibration_.isValid() && project_.calibration.imagePoints.size() >= 4) {
+        // 2D-only calibration: estimate position from FOV + PnP
+        float fov = project_.calibrationView.cameraFovDeg;
+        QSize sz  = video_->frameSize();
+        if (sz.isEmpty()) sz = QSize(1920, 1080);
+        cameraPos3D_   = Calibration::computeCameraFromFov(
+            project_.calibration.imagePoints,
+            project_.calibration.stagePoints,
+            fov, sz);
+        camera3DValid_ = !cameraPos3D_.isNull();
+    } else {
+        cameraPos3D_   = {};
+        camera3DValid_ = false;
+    }
+}
+
+void MainWindow::updateSystemObjects()
+{
+    updateCameraPosition();
+    systemStageItems_.clear();
+
+    // Camera (id = -1): can show in 3D, never in video view
+    StageObject cam;
+    cam.id             = -1;
+    cam.name           = "Camera";
+    cam.color          = QColor(255, 200, 50);
+    cam.fovDeg         = project_.calibrationView.cameraFovDeg;
+    cam.visibleIn3D    = project_.calibrationView.showCameraIn3D;
+    cam.visibleInVideo = false;
+    if (camera3DValid_) {
+        cam.center = QPointF(cameraPos3D_.x(), cameraPos3D_.z());
+        cam.height = cameraPos3D_.y();
+    }
+    systemStageItems_ << cam;
+
+    // Calibration rect (id = -2): can show in both views
+    StageObject cr;
+    cr.id             = -2;
+    cr.name           = "Calib Rect";
+    cr.color          = QColor(255, 180, 0);
+    cr.visibleInVideo = project_.calibrationView.showCalibRectInVideo;
+    cr.visibleIn3D    = project_.calibrationView.showCalibRectIn3D;
+    if (!project_.calibration.stagePoints.isEmpty())
+        cr.polygon = QPolygonF(project_.calibration.stagePoints);
+    systemStageItems_ << cr;
+}
+
+void MainWindow::applyTheme(const QString& theme)
+{
+    currentTheme_ = theme;
+    QSettings s("onpoint", "onpoint");
+    s.setValue("theme", theme);
+    if (!themeManager_) return;
+    if (theme == "dark") {
+        themeManager_->setCurrentTheme("Dark");
+    } else if (theme == "light") {
+        themeManager_->setCurrentTheme("Light");
+    } else {
+        const bool isDark = qApp->styleHints()->colorScheme() == Qt::ColorScheme::Dark;
+        themeManager_->setCurrentTheme(isDark ? "Dark" : "Light");
+    }
+}
+
+void MainWindow::syncAllStageObjects()
+{
+    updateSystemObjects();
+
+    // Panels get the combined list: system items first so they appear at the top
+    stageItemsPanel_->setAllObjects(systemStageItems_ + project_.stageObjects);
+    stagePropertiesPanel_->setHas3DCalibration(calibration_.has3D());
+    stagePropertiesPanel_->setAllObjects(systemStageItems_ + project_.stageObjects);
+
+    // 3D view: user objects + explicit system-item controls
+    stage3DPanel_->setStageObjects(project_.stageObjects);
+    stage3DPanel_->setCalibRectVisible(project_.calibrationView.showCalibRectIn3D);
+    stage3DPanel_->setCameraMarker(
+        cameraPos3D_,
+        project_.calibrationView.cameraFovDeg,
+        camera3DValid_ && project_.calibrationView.showCameraIn3D);
+
+    // Video: user objects + calib rect boundary flag
+    video_->setStageObjects(project_.stageObjects);
+    video_->setCalibBoundaryVisible(project_.calibrationView.showCalibRectInVideo);
 }

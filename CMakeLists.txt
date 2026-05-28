@@ -13,12 +13,13 @@ if(APPLE)
         "/opt/homebrew/opt/qt"
         "/opt/homebrew/opt/qtbase"
         "/opt/homebrew/opt/qtsvg"
-        "/opt/homebrew/opt/qtmultimedia")
+        "/opt/homebrew/opt/qtmultimedia"
+        "/opt/homebrew/opt/qtopengl")
     set(Qt6Svg_DIR        "/opt/homebrew/opt/qtsvg/lib/cmake/Qt6Svg"              CACHE PATH "")
     set(Qt6Multimedia_DIR "/opt/homebrew/opt/qtmultimedia/lib/cmake/Qt6Multimedia" CACHE PATH "")
 endif()
 
-find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Network Concurrent Svg Multimedia)
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Network Concurrent Svg Multimedia OpenGL OpenGLWidgets)
 find_package(OpenCV REQUIRED COMPONENTS core calib3d imgproc)
 
 # Derive Qt install prefix — needed to locate auxiliary artifacts on Apple
@@ -62,6 +63,10 @@ set(SOURCES
     src/ui/StatsPanel.cpp
     src/ui/CalibrationPanel.cpp
     src/ui/SessionPanel.cpp
+    src/ui/Stage3DView.cpp
+    src/ui/Stage3DPanel.cpp
+    src/ui/StageItemsPanel.cpp
+    src/ui/StagePropertiesPanel.cpp
     # Session management
     src/SessionManager.cpp
 )
@@ -87,6 +92,10 @@ set(HEADERS
     src/ui/StatsPanel.h
     src/ui/CalibrationPanel.h
     src/ui/SessionPanel.h
+    src/ui/Stage3DView.h
+    src/ui/Stage3DPanel.h
+    src/ui/StageItemsPanel.h
+    src/ui/StagePropertiesPanel.h
     src/SessionManager.h
 )
 
@@ -195,6 +204,8 @@ target_link_libraries(onpoint PRIVATE
     Qt6::Network
     Qt6::Concurrent
     Qt6::Multimedia
+    Qt6::OpenGL
+    Qt6::OpenGLWidgets
     ${OpenCV_LIBS}
     qlementine
 )

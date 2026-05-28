@@ -169,8 +169,9 @@ void PsnSender::configure(const NetworkConfig& cfg) {
 }
 
 void PsnSender::sendPositions(const QMap<int, QPair<float,float>>& positions,
-                               const QList<TrackerConfig>& trackers) {
-    sendDataPacketsV2(positions);
+                               const QList<TrackerConfig>& trackers,
+                               const QMap<int, float>& heights) {
+    sendDataPacketsV2(positions, heights);
 
     ++ticksSinceInfo_;
     if (ticksSinceInfo_ >= 60) {
@@ -179,7 +180,8 @@ void PsnSender::sendPositions(const QMap<int, QPair<float,float>>& positions,
     }
 }
 
-void PsnSender::sendDataPacketsV2(const QMap<int, QPair<float,float>>& positions) {
+void PsnSender::sendDataPacketsV2(const QMap<int, QPair<float,float>>& positions,
+                                   const QMap<int, float>& heights) {
     const quint64 nowUs = static_cast<quint64>(timer_.nsecsElapsed() / 1000);
     const qint64  nowMs = timer_.elapsed();
 
@@ -202,7 +204,8 @@ void PsnSender::sendDataPacketsV2(const QMap<int, QPair<float,float>>& positions
         lastPos_[id]    = {x, z};
         lastTimeMs_[id] = nowMs;
 
-        const QByteArray posChunk    = makeDataTrackerPosChunk(x, -z, outputHeight_);
+        const float      yOut        = heights.value(id, 0.0f);
+        const QByteArray posChunk    = makeDataTrackerPosChunk(x, -z, yOut);
         const QByteArray speedChunk  = makeDataTrackerSpeedChunk(vx, -vz, 0.0f);
         const QByteArray statusChunk = makeDataTrackerStatusChunk(1.0f);
 

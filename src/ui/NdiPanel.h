@@ -6,6 +6,7 @@ class NdiReceiver;
 class QListWidget;
 class QLabel;
 class QPushButton;
+class QTimer;
 
 class NdiPanel : public QWidget {
     Q_OBJECT
@@ -19,11 +20,12 @@ signals:
     void sourceSelected(QString source);
 
 private:
-    void scan();
+    void refresh();
 
     NdiReceiver* ndi_;
     QListWidget* list_;
     QLabel*      statusLabel_;
-    QPushButton* scanBtn_;
+    QPushButton* refreshBtn_;
     QPushButton* connectBtn_;
+    QTimer*      autoRefreshTimer_;
 };

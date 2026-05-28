@@ -1,5 +1,6 @@
 #include "NetworkSettingsPanel.h"
 #include <QVBoxLayout>
+#include <QHBoxLayout>
 #include <QFormLayout>
 #include <QButtonGroup>
 #include <QRadioButton>
@@ -18,19 +19,48 @@ NetworkSettingsPanel::NetworkSettingsPanel(QWidget* parent) : QWidget(parent) {
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(4);
 
-    multicastRadio_ = new QRadioButton("Multicast (recommended)");
+    // ── Session section ───────────────────────────────────────────────────
+    auto* sessionHeader = new QLabel("Session");
+    sessionHeader->setStyleSheet("font-weight: bold;");
+    layout->addWidget(sessionHeader);
+
+    auto* sessionForm = new QFormLayout;
+    sessionForm->setContentsMargins(0, 2, 0, 0);
+    sessionForm->setSpacing(4);
+    sessionIfaceCombo_ = new QComboBox;
+    sessionIfaceCombo_->setMinimumContentsLength(0);
+    sessionIfaceCombo_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    sessionForm->addRow("Interface:", sessionIfaceCombo_);
+    layout->addLayout(sessionForm);
+
+    auto makeSep = []() {
+        auto* sep = new QFrame;
+        sep->setFrameShape(QFrame::HLine);
+        sep->setFrameShadow(QFrame::Sunken);
+        return sep;
+    };
+    layout->addWidget(makeSep());
+
+    // ── PSN section ───────────────────────────────────────────────────────
+    auto* psnHeader = new QLabel("PSN");
+    psnHeader->setStyleSheet("font-weight: bold;");
+    layout->addWidget(psnHeader);
+
+    multicastRadio_ = new QRadioButton("Multicast");
     unicastRadio_   = new QRadioButton("Unicast");
     broadcastRadio_ = new QRadioButton("Broadcast");
     multicastRadio_->setChecked(true);
-    for (auto* r : {multicastRadio_, unicastRadio_, broadcastRadio_})
-        r->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
     psnModeGroup_ = new QButtonGroup(this);
     psnModeGroup_->addButton(multicastRadio_);
     psnModeGroup_->addButton(unicastRadio_);
     psnModeGroup_->addButton(broadcastRadio_);
-    layout->addWidget(multicastRadio_);
-    layout->addWidget(unicastRadio_);
-    layout->addWidget(broadcastRadio_);
+    auto* psnRadioRow = new QHBoxLayout;
+    psnRadioRow->setContentsMargins(0, 0, 0, 0);
+    psnRadioRow->setSpacing(4);
+    psnRadioRow->addWidget(multicastRadio_);
+    psnRadioRow->addWidget(unicastRadio_);
+    psnRadioRow->addWidget(broadcastRadio_);
+    layout->addLayout(psnRadioRow);
 
     formLayout_ = new QFormLayout;
     formLayout_->setContentsMargins(0, 4, 0, 0);
@@ -40,43 +70,44 @@ NetworkSettingsPanel::NetworkSettingsPanel(QWidget* parent) : QWidget(parent) {
     broadcastIpEdit_ = new QLineEdit("255.255.255.255");
     for (auto* e : {multicastIpEdit_, unicastIpEdit_, broadcastIpEdit_})
         e->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
-    portSpin_        = new QSpinBox;
-    portSpin_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
-    portSpin_->setRange(1, 65535);
-    portSpin_->setValue(56565);
     formLayout_->addRow("Multicast IP:", multicastIpEdit_);  // row 0
     formLayout_->addRow("Unicast IP:",   unicastIpEdit_);    // row 1
     formLayout_->addRow("Broadcast IP:", broadcastIpEdit_);  // row 2
-    formLayout_->addRow("Port:",         portSpin_);
 
-    psnIfaceCombo_     = new QComboBox;
+    psnIfaceCombo_ = new QComboBox;
     psnIfaceCombo_->setMinimumContentsLength(0);
     psnIfaceCombo_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    sessionIfaceCombo_ = new QComboBox;
-    sessionIfaceCombo_->setMinimumContentsLength(0);
-    sessionIfaceCombo_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    formLayout_->addRow("PSN iface:",     psnIfaceCombo_);
-    formLayout_->addRow("Session iface:", sessionIfaceCombo_);
+    formLayout_->addRow("Interface:", psnIfaceCombo_);
+
+    portSpin_ = new QSpinBox;
+    portSpin_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+    portSpin_->setRange(1, 65535);
+    portSpin_->setValue(56565);
+    formLayout_->addRow("Port:", portSpin_);
     layout->addLayout(formLayout_);
 
+    layout->addWidget(makeSep());
+
     // ── sACN input section ────────────────────────────────────────────────
-    auto* sacnSep = new QFrame;
-    sacnSep->setFrameShape(QFrame::HLine);
-    sacnSep->setFrameShadow(QFrame::Sunken);
-    layout->addWidget(sacnSep);
-    layout->addWidget(new QLabel("sACN Input (height control):"));
+    auto* sacnHeader = new QLabel("sACN Input");
+    sacnHeader->setStyleSheet("font-weight: bold;");
+    layout->addWidget(sacnHeader);
 
     sacnEnableCheck_ = new QCheckBox("Enable sACN input");
     layout->addWidget(sacnEnableCheck_);
 
-    sacnModeMulticast_ = new QRadioButton("Multicast (E1.31 239.255.X.Y)");
+    sacnModeMulticast_ = new QRadioButton("Multicast (E1.31)");
     sacnModeUnicast_   = new QRadioButton("Unicast");
     sacnModeMulticast_->setChecked(true);
     sacnModeGroup_ = new QButtonGroup(this);
     sacnModeGroup_->addButton(sacnModeMulticast_);
     sacnModeGroup_->addButton(sacnModeUnicast_);
-    layout->addWidget(sacnModeMulticast_);
-    layout->addWidget(sacnModeUnicast_);
+    auto* sacnRadioRow = new QHBoxLayout;
+    sacnRadioRow->setContentsMargins(0, 0, 0, 0);
+    sacnRadioRow->setSpacing(4);
+    sacnRadioRow->addWidget(sacnModeMulticast_);
+    sacnRadioRow->addWidget(sacnModeUnicast_);
+    layout->addLayout(sacnRadioRow);
 
     auto* sacnForm = new QFormLayout;
     sacnForm->setContentsMargins(0, 2, 0, 0);
@@ -112,6 +143,7 @@ NetworkSettingsPanel::NetworkSettingsPanel(QWidget* parent) : QWidget(parent) {
     sacnForm->addRow("Min height:", sacnMinSpin_);
     sacnForm->addRow("Max height:", sacnMaxSpin_);
     layout->addLayout(sacnForm);
+    layout->addStretch();
 
     // Populate sACN interface combo alongside PSN/session combos
     auto populateSacnIface = [this]() {

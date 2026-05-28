@@ -119,13 +119,46 @@ Project Project::load(const QString& path) {
     p.network.sacnInput.maxHeight = float(sacn["maxHeight"].toDouble(10.0));
 
     QJsonObject cv = root["calibrationView"].toObject();
-    p.calibrationView.showFloorGrid    = cv["showFloorGrid"].toBool(false);
-    p.calibrationView.clickPlaneHeight = float(cv["clickPlaneHeight"].toDouble(0.0));
-    p.calibrationView.showClickPlane   = cv["showClickPlane"].toBool(false);
+    p.calibrationView.showFloorGrid        = cv["showFloorGrid"].toBool(false);
+    p.calibrationView.clickPlaneHeight     = float(cv["clickPlaneHeight"].toDouble(0.0));
+    p.calibrationView.showClickPlane       = cv["showClickPlane"].toBool(false);
+    p.calibrationView.showCalibRectInVideo = cv["showCalibRectInVideo"].toBool(true);
+    p.calibrationView.showCalibRectIn3D    = cv["showCalibRectIn3D"].toBool(true);
+    p.calibrationView.showCameraIn3D       = cv["showCameraIn3D"].toBool(false);
+    p.calibrationView.cameraFovDeg         = float(cv["cameraFovDeg"].toDouble(60.0));
 
     QJsonObject stMap = root["stationTrackers"].toObject();
     for (auto it = stMap.constBegin(); it != stMap.constEnd(); ++it)
         p.stationTrackers[it.key()] = jsonToIntList(it.value().toArray());
+
+    QJsonObject cam3d = root["stage3dCamera"].toObject();
+    p.stage3dCamera.centerX = float(cam3d["centerX"].toDouble(0.0));
+    p.stage3dCamera.centerY = float(cam3d["centerY"].toDouble(0.0));
+    p.stage3dCamera.centerZ = float(cam3d["centerZ"].toDouble(0.0));
+    p.stage3dCamera.yaw     = float(cam3d["yaw"].toDouble(0.0));
+    p.stage3dCamera.pitch   = float(cam3d["pitch"].toDouble(45.0));
+    p.stage3dCamera.dist    = float(cam3d["dist"].toDouble(10.0));
+
+    for (const auto& sv : root["stageObjects"].toArray()) {
+        QJsonObject so = sv.toObject();
+        StageObject obj;
+        obj.id       = so["id"].toInt();
+        obj.name     = so["name"].toString();
+        obj.color    = QColor(so["color"].toString("#64a0dc"));
+        if (!obj.color.isValid()) obj.color = QColor(100, 160, 220, 180);
+        obj.color.setAlpha(so["colorAlpha"].toInt(180));
+        obj.height   = float(so["height"].toDouble(1.0));
+        obj.isRect   = so["isRect"].toBool(true);
+        obj.center   = QPointF(so["cx"].toDouble(), so["cz"].toDouble());
+        obj.width    = float(so["width"].toDouble(2.0));
+        obj.depth    = float(so["depth"].toDouble(1.0));
+        obj.rotation = float(so["rotation"].toDouble(0.0));
+        obj.polygon        = jsonToPointList(so["polygon"].toArray());
+        obj.visibleInVideo = so["visibleInVideo"].toBool(true);
+        obj.visibleIn3D    = so["visibleIn3D"].toBool(true);
+        obj.isStageOutline = so["isStageOutline"].toBool(false);
+        p.stageObjects << obj;
+    }
 
     return p;
 }
@@ -186,15 +219,50 @@ void Project::save(const QString& path) const {
     root["network"] = net;
 
     QJsonObject cv;
-    cv["showFloorGrid"]    = calibrationView.showFloorGrid;
-    cv["clickPlaneHeight"] = double(calibrationView.clickPlaneHeight);
-    cv["showClickPlane"]   = calibrationView.showClickPlane;
+    cv["showFloorGrid"]        = calibrationView.showFloorGrid;
+    cv["clickPlaneHeight"]     = double(calibrationView.clickPlaneHeight);
+    cv["showClickPlane"]       = calibrationView.showClickPlane;
+    cv["showCalibRectInVideo"] = calibrationView.showCalibRectInVideo;
+    cv["showCalibRectIn3D"]    = calibrationView.showCalibRectIn3D;
+    cv["showCameraIn3D"]       = calibrationView.showCameraIn3D;
+    cv["cameraFovDeg"]         = double(calibrationView.cameraFovDeg);
     root["calibrationView"] = cv;
 
     QJsonObject stMap;
     for (auto it = stationTrackers.constBegin(); it != stationTrackers.constEnd(); ++it)
         stMap[it.key()] = intListToJson(it.value());
     root["stationTrackers"] = stMap;
+
+    QJsonArray stageArr;
+    for (const auto& obj : stageObjects) {
+        QJsonObject so;
+        so["id"]       = obj.id;
+        so["name"]     = obj.name;
+        so["color"]    = obj.color.name();
+        so["colorAlpha"]= obj.color.alpha();
+        so["height"]   = double(obj.height);
+        so["isRect"]   = obj.isRect;
+        so["cx"]       = obj.center.x();
+        so["cz"]       = obj.center.y();
+        so["width"]    = double(obj.width);
+        so["depth"]    = double(obj.depth);
+        so["rotation"] = double(obj.rotation);
+        so["polygon"]        = pointListToJson(obj.polygon);
+        so["visibleInVideo"] = obj.visibleInVideo;
+        so["visibleIn3D"]    = obj.visibleIn3D;
+        so["isStageOutline"] = obj.isStageOutline;
+        stageArr << so;
+    }
+    root["stageObjects"] = stageArr;
+
+    QJsonObject cam3d;
+    cam3d["centerX"] = double(stage3dCamera.centerX);
+    cam3d["centerY"] = double(stage3dCamera.centerY);
+    cam3d["centerZ"] = double(stage3dCamera.centerZ);
+    cam3d["yaw"]     = double(stage3dCamera.yaw);
+    cam3d["pitch"]   = double(stage3dCamera.pitch);
+    cam3d["dist"]    = double(stage3dCamera.dist);
+    root["stage3dCamera"] = cam3d;
 
     QFile f(path);
     if (f.open(QIODevice::WriteOnly))

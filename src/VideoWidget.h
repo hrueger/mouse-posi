@@ -3,6 +3,8 @@
 #include <QImage>
 #include <QMap>
 #include <QVector3D>
+#include <QPointF>
+#include "Project.h"
 
 struct TrackerConfig;
 class Calibration;
@@ -31,6 +33,9 @@ public slots:
     void setShowFloorGrid(bool on);
     void setClickPlaneHeight(float h);
     void setShowClickPlane(bool on);
+    void setStageObjects(const QList<StageObject>& objs);
+    void setCalibStagePoints(const QList<QPointF>& pts);
+    void setCalibBoundaryVisible(bool on);
     // Session: which trackers the local user is assigned (empty = all at full opacity)
     void setAssignedTrackers(const QList<int>& ids, int unassignedAlpha = 80);
 
@@ -80,8 +85,10 @@ private:
     void    drawCalibOverlay(QPainter& p) const;
     void    drawAxisLegend(QPainter& p) const;
     void    drawFloorGrid(QPainter& p) const;
+    void    drawCalibBoundary(QPainter& p) const;
     void    drawHeightGhosts(QPainter& p) const;
     void    drawClickPlaneOverlay(QPainter& p) const;
+    void    drawStageShapes(QPainter& p) const;
     // Returns -1 (origin), >=0 (point index), or -2 (nothing nearby).
     int     nearestCalibPoint(QPointF widgetPos, double threshold = 15.0) const;
 
@@ -111,9 +118,12 @@ private:
     bool    ndiSourceConfigured_ = false;
     Calibration* calibration_ = nullptr;
 
-    bool  showFloorGrid_    = false;
-    float clickPlaneHeight_ = 0.0f;
-    bool  showClickPlane_   = false;
+    bool  showFloorGrid_       = false;
+    float clickPlaneHeight_    = 0.0f;
+    bool  showClickPlane_      = false;
+    bool  showCalibBoundary_   = true;
+    QList<StageObject> stageObjects_;
+    QList<QPointF>     calibStagePoints_;
 
     QList<QPointF> calibOverlayPoints_;
     int            calibOverlayHighlight_ = -1;

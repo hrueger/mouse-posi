@@ -1,6 +1,8 @@
 #pragma once
 #include <QPointF>
 #include <QList>
+#include <QVector3D>
+#include <QSize>
 #include <opencv2/core.hpp>
 
 class Calibration {
@@ -41,6 +43,18 @@ public:
     // Call fromList() first to restore the floor homography.
     QList<double> projectionToList() const;
     void          projectionFromList(const QList<double>& vals);
+
+    // Camera centre in stage space (X,Y,Z). Valid only when has3D().
+    QVector3D cameraCenter3D() const;
+
+    // Estimate camera 3D position from floor calibration + horizontal FOV.
+    // Uses PnP with the provided image/stage point pairs.
+    // imageSize is the video frame dimensions in pixels.
+    // Returns null vector on failure.
+    static QVector3D computeCameraFromFov(
+        const QList<QPointF>& imagePoints,
+        const QList<QPointF>& stagePoints,
+        float fovHDeg, QSize imageSize);
 
 private:
     cv::Mat    H_;      // 3×3 floor homography  (image → stage XZ)

@@ -101,13 +101,14 @@ CalibrationPanel::CalibrationPanel(VideoWidget* video, NdiReceiver* ndi,
     floorGridCheck_ = new QCheckBox("Show floor grid (1×1 m)");
     h3l->addWidget(floorGridCheck_);
 
-    mkHeightRow(h3l, "Height (click / PSN output):", clickPlaneSlider_, clickPlaneSpin_);
+    mkHeightRow(h3l, "Height above stage surface:", clickPlaneSlider_, clickPlaneSpin_);
 
     showClickPlaneCheck_ = new QCheckBox("Show click plane");
     h3l->addWidget(showClickPlaneCheck_);
 
     has3DControls_->setEnabled(false);
     layout->addWidget(has3DControls_);
+    layout->addStretch();
 
     // Slider ↔ spinbox bidirectional sync; emit the signal from whichever side changed.
     connect(clickPlaneSlider_, &QSlider::valueChanged, this, [this](int v) {

@@ -12,6 +12,7 @@
 #include <QTextStream>
 #include <QSize>
 #include <QThread>
+#include <QVector3D>
 #include <QtGlobal>
 #include "Project.h"
 #include "Calibration.h"
@@ -31,11 +32,17 @@ class NetworkSettingsPanel;
 class StatsPanel;
 class CalibrationPanel;
 class SessionPanel;
+class Stage3DPanel;
+class StageItemsPanel;
+class StagePropertiesPanel;
+namespace oclero { namespace qlementine { class ThemeManager; } }
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
 public:
-    explicit MainWindow(NdiReceiver* ndi, QWidget* parent = nullptr);
+    explicit MainWindow(NdiReceiver* ndi,
+                       oclero::qlementine::ThemeManager* themeManager,
+                       QWidget* parent = nullptr);
     ~MainWindow() override;
 
     void loadProject(const Project& p);
@@ -78,6 +85,12 @@ private:
 
     void handleVideoFrame(const QImage& frame);
     void applyPlaneHeight(float h);
+    void applyTheme(const QString& theme);
+    float stageHeightAt(float x, float z) const;
+
+    void updateCameraPosition();
+    void updateSystemObjects();
+    void syncAllStageObjects();
 
     VideoWidget*          video_;
     TrackersPanel*        trackersPanel_;
@@ -87,6 +100,9 @@ private:
     StatsPanel*           statsPanel_;
     CalibrationPanel*     calibrationPanel_;
     SessionPanel*         sessionPanel_;
+    Stage3DPanel*            stage3DPanel_;
+    StageItemsPanel*         stageItemsPanel_;
+    StagePropertiesPanel*    stagePropertiesPanel_;
 
     QDockWidget* videoDock_;
     QDockWidget* sessionDock_;
@@ -95,6 +111,9 @@ private:
     QDockWidget* trackersDock_;
     QDockWidget* networkDock_;
     QDockWidget* statsDock_;
+    QDockWidget* stage3DDock_;
+    QDockWidget* stageItemsDock_;
+    QDockWidget* stagePropertiesDock_;
     QList<QDockWidget*> panelDocks_;
 
     NdiReceiver*  ndi_;
@@ -130,8 +149,15 @@ private:
 
     bool projectDirty_    = false;
     bool applyingProject_ = false;
+
+    QList<StageObject> systemStageItems_;
+    QVector3D          cameraPos3D_;
+    bool               camera3DValid_ = false;
     qint64  sacnLastReceivedMs_ = -1;  // ms since epoch, -1 = never
     QString sacnSourceName_;
+
+    oclero::qlementine::ThemeManager* themeManager_ = nullptr;
+    QString currentTheme_;
 
     // Stats counters
     int     frameCount_   = 0;

@@ -1,9 +1,9 @@
 #include <QApplication>
+#include <QSurfaceFormat>
 #ifdef Q_OS_WIN
 #  include <objbase.h>
 #endif
 #include <QIcon>
-#include <QStyleHints>
 #ifdef HAVE_QT_DARWIN_CAMERA_PERMISSION_PLUGIN
 #  include <QtPlugin>
 #endif
@@ -17,6 +17,14 @@ Q_IMPORT_PLUGIN(QDarwinCameraPermissionPlugin)
 #endif
 
 int main(int argc, char* argv[]) {
+    // Must be set before QApplication to ensure all internal GL contexts
+    // (including shared ones) use the same version — required on macOS.
+    QSurfaceFormat fmt;
+    fmt.setVersion(3, 3);
+    fmt.setProfile(QSurfaceFormat::CoreProfile);
+    fmt.setDepthBufferSize(24);
+    QSurfaceFormat::setDefaultFormat(fmt);
+
 #ifdef Q_OS_WIN
     CoInitializeEx(nullptr, COINIT_MULTITHREADED);
 #endif
@@ -33,17 +41,9 @@ int main(int argc, char* argv[]) {
     auto* themeManager = new oclero::qlementine::ThemeManager(style, &app);
     themeManager->loadDirectory(":/themes");
 
-    const auto applySystemTheme = [themeManager]() {
-        const bool isDark = qApp->styleHints()->colorScheme() == Qt::ColorScheme::Dark;
-        themeManager->setCurrentTheme(isDark ? "Dark" : "Light");
-    };
-    applySystemTheme();
-    QObject::connect(qApp->styleHints(), &QStyleHints::colorSchemeChanged,
-                     themeManager, [applySystemTheme](Qt::ColorScheme) { applySystemTheme(); });
-
     auto* ndi = new NdiReceiver;
 
-    MainWindow w(ndi);
+    MainWindow w(ndi, themeManager);
     w.show();
     w.raise();
     w.activateWindow();

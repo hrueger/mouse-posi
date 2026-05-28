@@ -8,6 +8,7 @@
 #include <QFont>
 #include <QFontMetrics>
 #include <cmath>
+#include <algorithm>
 
 VideoWidget::VideoWidget(QWidget* parent) : QWidget(parent) {
     setMouseTracking(true);
@@ -100,6 +101,16 @@ void VideoWidget::setClickPlaneHeight(float h) {
     update();
 }
 
+void VideoWidget::setStageObjects(const QList<StageObject>& objs) {
+    stageObjects_ = objs;
+    update();
+}
+
+void VideoWidget::setCalibStagePoints(const QList<QPointF>& pts) {
+    calibStagePoints_ = pts;
+    update();
+}
+
 void VideoWidget::setShowClickPlane(bool on) {
     showClickPlane_ = on;
     update();
@@ -107,6 +118,11 @@ void VideoWidget::setShowClickPlane(bool on) {
 
 void VideoWidget::setCalibExplicitLines(const QList<QPair<QPointF,QPointF>>& lines) {
     calibExplicitLines_ = lines;
+    update();
+}
+
+void VideoWidget::setCalibBoundaryVisible(bool on) {
+    showCalibBoundary_ = on;
     update();
 }
 
@@ -359,7 +375,7 @@ void VideoWidget::drawFloorGrid(QPainter& p) const {
 
     const int kRange = 25;
 
-    // ── Floor plane (Y=0) — green ─────────────────────────────────────────
+    // ── Floor grid (Y=0) — green ──────────────────────────────────────────
     const QColor floorGrid(80, 200, 80, 45);
     const QColor floorAxis(80, 220, 80, 90);
     for (int x = -kRange; x <= kRange; x++) {
@@ -373,6 +389,109 @@ void VideoWidget::drawFloorGrid(QPainter& p) const {
                    frameToWidget(calibration_->stageToPixel(float( kRange), float(z))));
     }
 
+    p.restore();
+}
+
+void VideoWidget::drawCalibBoundary(QPainter& p) const {
+    if (!showCalibBoundary_ || !calibration_ || !calibration_->isValid()) return;
+    if (calibStagePoints_.size() < 3) return;
+
+    QList<QPointF> sorted = calibStagePoints_;
+    QPointF c;
+    for (const auto& pt : sorted) c += pt;
+    c /= sorted.size();
+    std::sort(sorted.begin(), sorted.end(), [c](const QPointF& a, const QPointF& b) {
+        return std::atan2(a.y()-c.y(), a.x()-c.x()) < std::atan2(b.y()-c.y(), b.x()-c.x());
+    });
+
+    p.save();
+    p.setRenderHint(QPainter::Antialiasing, true);
+    const double vw = frame_.isNull() ? width()  : frame_.width()  * scale_.width();
+    const double vh = frame_.isNull() ? height() : frame_.height() * scale_.height();
+    p.setClipRect(QRectF(offset_.x(), offset_.y(), vw, vh));
+
+    QPolygonF poly;
+    for (const auto& sp : sorted)
+        poly << frameToWidget(calibration_->stageToPixel(float(sp.x()), float(sp.y())));
+    p.setPen(QPen(QColor(100, 240, 100, 200), 2.5));
+    p.setBrush(Qt::NoBrush);
+    p.drawPolygon(poly);
+    p.restore();
+}
+
+void VideoWidget::drawStageShapes(QPainter& p) const {
+    if (!calibration_ || !calibration_->isValid()) return;
+    if (stageObjects_.isEmpty()) return;
+
+    p.save();
+    p.setRenderHint(QPainter::Antialiasing, true);
+    const double vw = frame_.isNull() ? width()  : frame_.width()  * scale_.width();
+    const double vh = frame_.isNull() ? height() : frame_.height() * scale_.height();
+    p.setClipRect(QRectF(offset_.x(), offset_.y(), vw, vh));
+
+    const bool can3D = calibration_->has3D();
+
+    for (const auto& obj : stageObjects_) {
+        if (!obj.visibleInVideo) continue;
+        if (obj.polygon.isEmpty()) continue;
+
+        QColor fill = obj.color;
+        fill.setAlpha(40);
+        QColor edge = obj.color;
+        edge.setAlpha(200);
+
+        // Floor-level polygon
+        QPolygonF floorPoly;
+        for (const QPointF& v : obj.polygon)
+            floorPoly << frameToWidget(calibration_->stageToPixel(float(v.x()), float(v.y())));
+
+        if (obj.isStageOutline) {
+            // Stage boundary — floor outline only, no fill
+            p.setPen(QPen(obj.color.lighter(130), 2.0, Qt::SolidLine));
+            p.setBrush(Qt::NoBrush);
+            p.drawPolygon(floorPoly);
+            continue;
+        }
+
+        const float h = obj.height;
+
+        // Subtle floor fill
+        p.setPen(Qt::NoPen);
+        p.setBrush(fill);
+        p.drawPolygon(floorPoly);
+
+        // Floor outline (thin)
+        p.setPen(QPen(edge, 1.0, Qt::DashLine));
+        p.setBrush(Qt::NoBrush);
+        p.drawPolygon(floorPoly);
+
+        // Height-level polygon (where objects/performers stand)
+        if (can3D && h > 0.001f) {
+            QPolygonF topPoly;
+            for (const QPointF& v : obj.polygon)
+                topPoly << frameToWidget(calibration_->stageAtHeightToPixel(
+                             float(v.x()), h, float(v.y())));
+            p.setPen(QPen(edge, 2.5));
+            p.setBrush(Qt::NoBrush);
+            p.drawPolygon(topPoly);
+            p.setPen(QPen(edge, 1.0, Qt::DotLine));
+            for (int i = 0; i < obj.polygon.size(); ++i)
+                p.drawLine(floorPoly[i], topPoly[i]);
+        } else {
+            p.setPen(QPen(edge, 2.5));
+            p.setBrush(Qt::NoBrush);
+            p.drawPolygon(floorPoly);
+        }
+
+        // Height label at polygon centroid
+        QPointF c;
+        for (const QPointF& v : floorPoly) c += v;
+        c /= floorPoly.size();
+        const QString lbl = QString("%1 m").arg(double(h), 0, 'f', 2);
+        p.setPen(edge);
+        p.setFont(QFont("Arial", 8));
+        p.drawText(c + QPointF(4, 4), lbl);
+    }
     p.restore();
 }
 
@@ -511,6 +630,9 @@ void VideoWidget::paintEvent(QPaintEvent*) {
     // Floor grid — drawn behind everything else
     drawFloorGrid(p);
 
+    // Calibration boundary outline (independently togglable)
+    drawCalibBoundary(p);
+
     // Calibration overlay is always drawn, independent of calibration validity.
     drawCalibOverlay(p);
 
@@ -559,6 +681,9 @@ void VideoWidget::paintEvent(QPaintEvent*) {
                        id, color.lighter(130), false);
         p.setOpacity(1.0);
     }
+
+    // ── Stage platform shapes ─────────────────────────────────────────────
+    drawStageShapes(p);
 
     // ── Click plane indicator ─────────────────────────────────────────────
     drawClickPlaneOverlay(p);

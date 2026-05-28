@@ -1,6 +1,7 @@
 #include "Calibration.h"
 #include <opencv2/calib3d.hpp>
 #include <opencv2/imgproc.hpp>
+#include <QtMath>
 #include <cmath>
 
 // ── 2D floor homography ───────────────────────────────────────────────────────
@@ -222,4 +223,53 @@ void Calibration::projectionFromList(const QList<double>& vals) {
     double cw  = cn.at<double>(3);
     C3d_  = cv::Vec3d(cn.at<double>(0)/cw, cn.at<double>(1)/cw, cn.at<double>(2)/cw);
     has3D_ = true;
+}
+
+// ── Camera position helpers ───────────────────────────────────────────────────
+
+QVector3D Calibration::cameraCenter3D() const
+{
+    if (!has3D_) return {};
+    return QVector3D(float(C3d_[0]), float(C3d_[1]), float(C3d_[2]));
+}
+
+QVector3D Calibration::computeCameraFromFov(
+    const QList<QPointF>& imagePoints,
+    const QList<QPointF>& stagePoints,
+    float fovHDeg, QSize imageSize)
+{
+    if (imagePoints.size() < 4 || imagePoints.size() != stagePoints.size())
+        return {};
+    if (imageSize.isEmpty() || fovHDeg <= 0.0f || fovHDeg >= 180.0f)
+        return {};
+
+    const float cx = imageSize.width()  / 2.0f;
+    const float cy = imageSize.height() / 2.0f;
+    const float fx = cx / float(std::tan(double(fovHDeg) * M_PI / 360.0));
+
+    std::vector<cv::Point3f> worldPts;
+    std::vector<cv::Point2f> imgPts;
+    for (int i = 0; i < imagePoints.size(); ++i) {
+        worldPts.emplace_back(float(stagePoints[i].x()), 0.0f, float(stagePoints[i].y()));
+        imgPts.emplace_back(float(imagePoints[i].x()), float(imagePoints[i].y()));
+    }
+
+    cv::Mat K = (cv::Mat_<double>(3,3) <<
+        double(fx), 0, double(cx),
+        0, double(fx), double(cy),
+        0, 0, 1);
+    cv::Mat dist = cv::Mat::zeros(4, 1, CV_64F);
+    cv::Mat rvec, tvec;
+
+    if (!cv::solvePnP(worldPts, imgPts, K, dist, rvec, tvec))
+        return {};
+
+    cv::Mat R;
+    cv::Rodrigues(rvec, R);
+    cv::Mat camCenter = -R.t() * tvec;
+
+    return QVector3D(
+        float(camCenter.at<double>(0)),
+        float(camCenter.at<double>(1)),
+        float(camCenter.at<double>(2)));
 }

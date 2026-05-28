@@ -14,25 +14,29 @@ NdiPanel::NdiPanel(NdiReceiver* ndi, QWidget* parent)
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(4);
 
-    statusLabel_ = new QLabel("Click Scan to discover sources.");
+    auto* headerRow = new QHBoxLayout;
+    statusLabel_ = new QLabel("Scanning for sources…");
     statusLabel_->setWordWrap(true);
     statusLabel_->setStyleSheet("color: palette(placeholderText); font-size: 11px;");
-    layout->addWidget(statusLabel_);
+    headerRow->addWidget(statusLabel_, 1);
+
+    refreshBtn_ = new QPushButton("↻");
+    refreshBtn_->setFixedSize(22, 22);
+    refreshBtn_->setToolTip("Refresh NDI sources");
+    refreshBtn_->setStyleSheet("font-size: 14px; padding: 0;");
+    headerRow->addWidget(refreshBtn_);
+    layout->addLayout(headerRow);
 
     list_ = new QListWidget;
     list_->setMinimumWidth(0);
     list_->setMaximumHeight(120);
     layout->addWidget(list_);
 
-    auto* btnRow = new QHBoxLayout;
-    scanBtn_    = new QPushButton("Scan");
     connectBtn_ = new QPushButton("Connect");
     connectBtn_->setEnabled(false);
-    btnRow->addWidget(scanBtn_);
-    btnRow->addWidget(connectBtn_);
-    layout->addLayout(btnRow);
+    layout->addWidget(connectBtn_);
 
-    connect(scanBtn_, &QPushButton::clicked, this, &NdiPanel::scan);
+    connect(refreshBtn_, &QPushButton::clicked, this, &NdiPanel::refresh);
     connect(connectBtn_, &QPushButton::clicked, this, [this]() {
         auto* item = list_->currentItem();
         if (item) emit sourceSelected(item->text());
@@ -46,15 +50,25 @@ NdiPanel::NdiPanel(NdiReceiver* ndi, QWidget* parent)
 
     if (ndi_) {
         connect(ndi_, &NdiReceiver::sourcesChanged, this, [this](QStringList sources) {
+            QString current = selectedSource();
             list_->clear();
             list_->addItems(sources);
+            if (!current.isEmpty()) {
+                const auto items = list_->findItems(current, Qt::MatchExactly);
+                if (!items.isEmpty()) list_->setCurrentItem(items.first());
+            }
             statusLabel_->setText(sources.isEmpty()
                 ? "No sources found." : QString("%1 source(s) found.").arg(sources.size()));
         });
     }
 
-    // Auto-discover sources on startup.
-    QTimer::singleShot(0, this, [this]() { scan(); });
+    // Auto-refresh every 5 seconds so new sources appear without manual intervention.
+    autoRefreshTimer_ = new QTimer(this);
+    autoRefreshTimer_->setInterval(5000);
+    connect(autoRefreshTimer_, &QTimer::timeout, this, &NdiPanel::refresh);
+    autoRefreshTimer_->start();
+
+    QTimer::singleShot(0, this, [this]() { refresh(); });
 }
 
 QString NdiPanel::selectedSource() const {
@@ -72,8 +86,6 @@ void NdiPanel::setCurrentSource(const QString& source) {
     }
 }
 
-void NdiPanel::scan() {
-    statusLabel_->setText("Scanning…");
-    list_->clear();
+void NdiPanel::refresh() {
     if (ndi_) ndi_->discoverSources();
 }

@@ -27,12 +27,20 @@ StreamSourcePanel::StreamSourcePanel(NdiReceiver* ndi, QWidget* parent)
     layout->setContentsMargins(6, 4, 6, 6);
     layout->setSpacing(6);
 
+    auto* sourceRow = new QHBoxLayout;
     masterCombo_ = new QComboBox;
     masterCombo_->setMinimumContentsLength(16);
     masterCombo_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
     comboModel_ = new QStandardItemModel(this);
     masterCombo_->setModel(comboModel_);
-    layout->addWidget(masterCombo_);
+    sourceRow->addWidget(masterCombo_, 1);
+
+    ndiRefreshBtn_ = new QPushButton("↻");
+    ndiRefreshBtn_->setFixedSize(22, 22);
+    ndiRefreshBtn_->setToolTip("Refresh NDI sources");
+    ndiRefreshBtn_->setStyleSheet("font-size: 14px; padding: 0;");
+    sourceRow->addWidget(ndiRefreshBtn_);
+    layout->addLayout(sourceRow);
 
     propsStack_ = new QStackedWidget;
     propsStack_->setVisible(false);
@@ -45,8 +53,6 @@ StreamSourcePanel::StreamSourcePanel(NdiReceiver* ndi, QWidget* parent)
         auto* pl   = new QVBoxLayout(page);
         pl->setContentsMargins(0, 4, 0, 0);
         pl->setSpacing(4);
-        ndiRefreshBtn_ = new QPushButton("Refresh NDI sources");
-        pl->addWidget(ndiRefreshBtn_);
         pl->addStretch();
         propsStack_->addWidget(page);
     }
@@ -132,6 +138,14 @@ StreamSourcePanel::StreamSourcePanel(NdiReceiver* ndi, QWidget* parent)
         if (settingSource_) return;
         emitDecklinkSelection();
     });
+
+    // Auto-refresh NDI sources every 5 seconds.
+    auto* ndiTimer = new QTimer(this);
+    ndiTimer->setInterval(5000);
+    connect(ndiTimer, &QTimer::timeout, this, [this]() {
+        if (ndi_) ndi_->discoverSources();
+    });
+    ndiTimer->start();
 
     rebuildCombo();
     QTimer::singleShot(0, this, [this]() {

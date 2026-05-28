@@ -4,6 +4,24 @@
 #include <QList>
 #include <QMap>
 #include <QPointF>
+#include <QPolygonF>
+
+struct StageObject {
+    int       id       = 0;
+    QString   name;
+    QColor    color    = QColor(100, 160, 220, 180);
+    float     height   = 1.0f;   // metres above floor
+    bool      isRect   = true;   // was created as rectangle
+    QPointF   center;            // XZ centre (rect)
+    float     width    = 2.0f;   // X dimension metres (rect)
+    float     depth    = 1.0f;   // Z dimension metres (rect)
+    float     rotation = 0.0f;   // degrees around Y axis (rect)
+    QPolygonF polygon;           // XZ polygon — always kept in sync
+    bool      visibleInVideo = true;
+    bool      visibleIn3D    = true;
+    bool      isStageOutline = false; // stage boundary — no height walls
+    float     fovDeg         = 60.0f; // horizontal FOV (Camera system item only)
+};
 
 struct TrackerConfig {
     int     id    = 1;
@@ -27,9 +45,13 @@ struct CalibrationData {
 enum class PsnMode { Multicast, Unicast, Broadcast };
 
 struct CalibrationViewSettings {
-    bool  showFloorGrid    = false;
-    float clickPlaneHeight = 0.0f;
-    bool  showClickPlane   = false;
+    bool  showFloorGrid         = false;
+    float clickPlaneHeight      = 0.0f;
+    bool  showClickPlane        = false;
+    bool  showCalibRectInVideo  = true;
+    bool  showCalibRectIn3D     = true;
+    bool  showCameraIn3D        = false;
+    float cameraFovDeg          = 60.0f;
 };
 
 enum class SacnMode { Multicast, Unicast };
@@ -55,6 +77,15 @@ struct NetworkConfig {
     SacnInputConfig sacnInput;
 };
 
+struct Stage3DCameraState {
+    float centerX = 0.0f;
+    float centerY = 0.0f;
+    float centerZ = 0.0f;
+    float yaw     = 0.0f;
+    float pitch   = 45.0f;
+    float dist    = 10.0f;
+};
+
 struct Project {
     QString                 videoSourceType;     // "ndi" | "webcam" | "decklink" (empty = ndi)
     QString                 ndiSource;
@@ -69,6 +100,8 @@ struct Project {
     // Per-station tracker assignments: stationName -> list of assigned tracker IDs.
     // Populated by the host and persisted so rejoining stations get their last config.
     QMap<QString, QList<int>> stationTrackers;
+    QList<StageObject>        stageObjects;
+    Stage3DCameraState        stage3dCamera;
 
     static Project   load(const QString& path);
     void             save(const QString& path) const;
