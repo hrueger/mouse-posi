@@ -35,6 +35,7 @@ class SessionPanel;
 class Stage3DPanel;
 class StageItemsPanel;
 class StagePropertiesPanel;
+class WelcomeScreen;
 namespace oclero { namespace qlementine { class ThemeManager; } }
 
 class MainWindow : public QMainWindow {
@@ -91,6 +92,9 @@ private:
     void updateCameraPosition();
     void updateSystemObjects();
     void syncAllStageObjects();
+    void showWelcomeScreen();
+    void showWorkspace();
+    void openRecentProject(const QString& path);
 
     VideoWidget*          video_;
     TrackersPanel*        trackersPanel_;
@@ -158,6 +162,15 @@ private:
 
     oclero::qlementine::ThemeManager* themeManager_ = nullptr;
     QString currentTheme_;
+
+    WelcomeScreen* welcomeScreen_  = nullptr;
+    QWidget*       centralContainer_ = nullptr;
+    QByteArray     savedWindowState_;
+    bool           workspaceActive_ = false;
+
+    QAction* actSaveProject_   = nullptr;
+    QAction* actSaveProjectAs_ = nullptr;
+    QAction* actCloseProject_  = nullptr;
 
     // Stats counters
     int     frameCount_   = 0;

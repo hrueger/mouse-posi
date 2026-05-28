@@ -17,27 +17,18 @@ public:
 
 private slots:
     void onStateChanged(SessionManager::State state);
-    void onBrowsedSessionsChanged(QList<DiscoveredSession> sessions);
     void onPeerJoined(SessionPeer peer);
     void onPeerLeft(QString name);
 
 private:
-    void buildHostView();
-    void buildJoinView();
-
     SessionManager* mgr_;
     QString         sessionInterface_;
 
-    // Host controls
     QLineEdit*    sessionNameEdit_;
     QLineEdit*    peerNameEdit_;
     QPushButton*  hostBtn_;
     QPushButton*  stopBtn_;
     QListWidget*  peersView_;
-
-    // Join controls
-    QListWidget*  sessionsView_;
-    QPushButton*  joinBtn_;
     QPushButton*  leaveBtn_;
 
     QLabel*       statusLabel_;

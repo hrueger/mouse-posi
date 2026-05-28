@@ -67,6 +67,7 @@ set(SOURCES
     src/ui/Stage3DPanel.cpp
     src/ui/StageItemsPanel.cpp
     src/ui/StagePropertiesPanel.cpp
+    src/ui/WelcomeScreen.cpp
     # Session management
     src/SessionManager.cpp
 )
@@ -96,6 +97,7 @@ set(HEADERS
     src/ui/Stage3DPanel.h
     src/ui/StageItemsPanel.h
     src/ui/StagePropertiesPanel.h
+    src/ui/WelcomeScreen.h
     src/SessionManager.h
 )
 

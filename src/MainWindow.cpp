@@ -18,6 +18,7 @@
 #include "ui/Stage3DPanel.h"
 #include "ui/StageItemsPanel.h"
 #include "ui/StagePropertiesPanel.h"
+#include "ui/WelcomeScreen.h"
 #include <oclero/qlementine/style/ThemeManager.hpp>
 #include <QApplication>
 #include <QStyleHints>
@@ -87,10 +88,15 @@ MainWindow::MainWindow(NdiReceiver* ndi,
     statsPanel_      = new StatsPanel;
 
     // ── Dock layout ───────────────────────────────────────────────────────
-    // Invisible central placeholder so dock widgets can fill all available space
-    auto* placeholder = new QWidget;
-    placeholder->setMaximumSize(0, 0);
-    setCentralWidget(placeholder);
+    // Central widget: contains the welcome screen; shrunk to 0x0 in workspace mode
+    // so dock widgets fill all available space.
+    centralContainer_ = new QWidget;
+    auto* centralLayout = new QVBoxLayout(centralContainer_);
+    centralLayout->setContentsMargins(0, 0, 0, 0);
+    welcomeScreen_ = new WelcomeScreen(sessionMgr_);
+    centralLayout->addWidget(welcomeScreen_);
+    centralContainer_->setMaximumSize(0, 0);
+    setCentralWidget(centralContainer_);
     setDockNestingEnabled(true);
 
     // Video dock: tracker bar on top, video below
@@ -628,8 +634,10 @@ MainWindow::MainWindow(NdiReceiver* ndi,
     auto* fileMenu  = menuBar()->addMenu("&File");
     auto* actNew    = fileMenu->addAction("&New Project");
     auto* actOpen   = fileMenu->addAction("&Open Project...");
-    auto* actSave   = fileMenu->addAction("&Save Project");
-    auto* actSaveAs = fileMenu->addAction("Save Project &As...");
+    actSaveProject_   = fileMenu->addAction("&Save Project");
+    actSaveProjectAs_ = fileMenu->addAction("Save Project &As...");
+    auto* actSave   = actSaveProject_;
+    auto* actSaveAs = actSaveProjectAs_;
     actNew->setShortcut(QKeySequence::New);
     actOpen->setShortcut(QKeySequence::Open);
     actSave->setShortcut(QKeySequence::Save);
@@ -638,6 +646,27 @@ MainWindow::MainWindow(NdiReceiver* ndi,
     connect(actOpen,   &QAction::triggered, this, &MainWindow::onOpenProject);
     connect(actSave,   &QAction::triggered, this, &MainWindow::onSaveProject);
     connect(actSaveAs, &QAction::triggered, this, &MainWindow::onSaveProjectAs);
+
+    fileMenu->addSeparator();
+    actCloseProject_ = fileMenu->addAction("&Close Project");
+    auto* actClose = actCloseProject_;
+    connect(actClose, &QAction::triggered, this, [this]() {
+        if (projectDirty_) {
+            QString name = projectPath_.isEmpty()
+                ? QStringLiteral("Untitled")
+                : QFileInfo(projectPath_).fileName();
+            auto btn = QMessageBox::question(this, "Unsaved Changes",
+                QString("Save changes to \"%1\" before closing?").arg(name),
+                QMessageBox::Save | QMessageBox::Discard | QMessageBox::Cancel);
+            if (btn == QMessageBox::Cancel) return;
+            if (btn == QMessageBox::Save)   onSaveProject();
+        }
+        workspaceActive_ = false;
+        project_     = Project{};
+        projectPath_ = QString();
+        projectDirty_ = false;
+        showWelcomeScreen();
+    });
 
     // Ensure shortcuts work even if the menu bar is hidden by the OS/window mode.
     addAction(actNew);
@@ -716,11 +745,11 @@ MainWindow::MainWindow(NdiReceiver* ndi,
         streamDock_->raise();
     });
 
-    // Restore saved layout (must happen after all docks are created)
+    // Restore window geometry now; dock state is deferred until workspace is shown.
     {
         QSettings s("onpoint", "onpoint");
         if (s.contains("windowGeometry")) restoreGeometry(s.value("windowGeometry").toByteArray());
-        if (s.contains("windowState"))    restoreState(s.value("windowState").toByteArray());
+        if (s.contains("windowState"))    savedWindowState_ = s.value("windowState").toByteArray();
     }
 
     auto* helpMenu  = menuBar()->addMenu("&Help");
@@ -741,8 +770,90 @@ MainWindow::MainWindow(NdiReceiver* ndi,
         if (currentTheme_ == "system") applyTheme("system");
     });
 
-    loadProject(Project::defaultProject());
+    // Connect welcome screen actions
+    connect(welcomeScreen_, &WelcomeScreen::newRequested, this, [this]() {
+        showWorkspace();
+        onNewProject();
+    });
+    connect(welcomeScreen_, &WelcomeScreen::openRequested, this, [this](const QString& path) {
+        if (path.isEmpty()) {
+            showWorkspace();
+            onOpenProject();
+        } else {
+            openRecentProject(path);
+        }
+    });
+    connect(welcomeScreen_, &WelcomeScreen::joinRequested,
+            this, [this](const QString& peerName, const QString& iface, DiscoveredSession session) {
+        showWorkspace();
+        onNewProject();
+        project_.network.sessionInterface = iface;
+        networkPanel_->setConfig(project_.network);
+        sessionMgr_->joinSession(session.host, session.port, peerName);
+    });
+
+    showWelcomeScreen();
     updateSessionStatus();
+}
+
+void MainWindow::showWelcomeScreen()
+{
+    workspaceActive_ = false;
+    welcomeScreen_->refresh(recentProjects());
+    centralContainer_->setMaximumSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX);
+    statusBar()->hide();
+    actSaveProject_->setEnabled(false);
+    actSaveProjectAs_->setEnabled(false);
+    actCloseProject_->setEnabled(false);
+
+    // Hide all docks so the welcome screen fills the window
+    videoDock_->hide();
+    stage3DDock_->hide();
+    stageItemsDock_->hide();
+    stagePropertiesDock_->hide();
+    for (auto* d : panelDocks_) d->hide();
+}
+
+void MainWindow::showWorkspace()
+{
+    if (workspaceActive_) return;
+    workspaceActive_ = true;
+
+    // Shrink the central container so docks fill the window
+    centralContainer_->setMaximumSize(0, 0);
+    statusBar()->show();
+    actSaveProject_->setEnabled(true);
+    actSaveProjectAs_->setEnabled(true);
+    actCloseProject_->setEnabled(true);
+
+    // Restore dock positions/sizes from the previous workspace session.
+    // Always force-show all docks afterwards: restoreState may have recorded
+    // a hidden state (e.g. saved while the welcome screen was showing).
+    if (!savedWindowState_.isEmpty())
+        restoreState(savedWindowState_);
+
+    videoDock_->show();
+    stage3DDock_->show();
+    stageItemsDock_->show();
+    stagePropertiesDock_->show();
+    for (auto* d : panelDocks_) d->show();
+}
+
+void MainWindow::openRecentProject(const QString& path)
+{
+    try {
+        Project p = Project::load(path);
+        showWorkspace();
+        projectPath_ = path;
+        loadProject(p);
+        saveRecent(path);
+        updateWindowTitle();
+        markSaved();
+    } catch (const std::exception& e) {
+        QMessageBox::critical(this, "Invalid Showfile",
+            QString("Could not open \"%1\":\n\n%2")
+                .arg(QFileInfo(path).fileName(), QString::fromStdString(e.what())));
+    }
 }
 
 MainWindow::~MainWindow() {
@@ -1018,7 +1129,7 @@ void MainWindow::updateWindowTitle() {
 }
 
 void MainWindow::closeEvent(QCloseEvent* e) {
-    if (projectDirty_) {
+    if (projectDirty_ && workspaceActive_) {
         QString name = projectPath_.isEmpty()
             ? QStringLiteral("Untitled")
             : QFileInfo(projectPath_).fileName();
@@ -1030,7 +1141,7 @@ void MainWindow::closeEvent(QCloseEvent* e) {
     }
     QSettings s("onpoint", "onpoint");
     s.setValue("windowGeometry", saveGeometry());
-    s.setValue("windowState",    saveState());
+    if (workspaceActive_) s.setValue("windowState", saveState());
     e->accept();
 }
 
@@ -1224,6 +1335,7 @@ void MainWindow::handleVideoFrame(const QImage& frame) {
 }
 
 void MainWindow::onNewProject() {
+    showWorkspace();
     project_     = Project::defaultProject();
     projectPath_ = QString();
     trackerPositions_.clear();
@@ -1236,6 +1348,7 @@ void MainWindow::onNewProject() {
 }
 
 void MainWindow::onOpenProject() {
+    showWorkspace();
     QFileDialog::Options opts;
 #ifdef Q_OS_MAC
     opts |= QFileDialog::DontUseNativeDialog;

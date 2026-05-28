@@ -23,7 +23,7 @@ SessionPanel::SessionPanel(SessionManager* mgr, QWidget* parent)
 
     stack_ = new QStackedWidget;
 
-    // ── Page 0: Idle — host or join ──────────────────────────────────────
+    // ── Page 0: Idle — host ───────────────────────────────────────────────
     auto* idlePage = new QWidget;
     auto* idleLayout = new QVBoxLayout(idlePage);
     idleLayout->setContentsMargins(0, 0, 0, 0);
@@ -43,16 +43,6 @@ SessionPanel::SessionPanel(SessionManager* mgr, QWidget* parent)
     idleLayout->addLayout(hostFL);
     hostBtn_ = new QPushButton("Start Hosting");
     idleLayout->addWidget(hostBtn_);
-
-    idleLayout->addSpacing(6);
-    idleLayout->addWidget(new QLabel("Sessions:"));
-    sessionsView_ = new QListWidget;
-    sessionsView_->setMinimumWidth(0);
-    sessionsView_->setMaximumHeight(100);
-    joinBtn_ = new QPushButton("Join Selected");
-    joinBtn_->setEnabled(false);
-    idleLayout->addWidget(sessionsView_);
-    idleLayout->addWidget(joinBtn_);
 
     idleLayout->addStretch();
     stack_->addWidget(idlePage);  // index 0
@@ -93,27 +83,12 @@ SessionPanel::SessionPanel(SessionManager* mgr, QWidget* parent)
         s.setValue("peerName", peer);
         mgr_->startHosting(name, peer, sessionInterface_);
     });
-    connect(stopBtn_, &QPushButton::clicked, mgr_, &SessionManager::stopHosting);
+    connect(stopBtn_,  &QPushButton::clicked, mgr_, &SessionManager::stopHosting);
     connect(leaveBtn_, &QPushButton::clicked, mgr_, &SessionManager::leaveSession);
 
-    connect(joinBtn_, &QPushButton::clicked, this, [this]() {
-        auto* item = sessionsView_->currentItem();
-        if (!item) return;
-        auto disc = item->data(Qt::UserRole).value<DiscoveredSession>();
-        QString peer = peerNameEdit_->text().trimmed();
-        if (peer.isEmpty()) peer = "Station 1";
-        QSettings s("onpoint", "onpoint");
-        s.setValue("peerName", peer);
-        mgr_->joinSession(disc.host, disc.port, peer);
-    });
-    connect(sessionsView_, &QListWidget::itemSelectionChanged, this, [this]() {
-        joinBtn_->setEnabled(sessionsView_->currentItem() != nullptr);
-    });
-
-    connect(mgr_, &SessionManager::stateChanged,          this, &SessionPanel::onStateChanged);
-    connect(mgr_, &SessionManager::browsedSessionsChanged, this, &SessionPanel::onBrowsedSessionsChanged);
-    connect(mgr_, &SessionManager::peerJoined,            this, &SessionPanel::onPeerJoined);
-    connect(mgr_, &SessionManager::peerLeft,              this, &SessionPanel::onPeerLeft);
+    connect(mgr_, &SessionManager::stateChanged, this, &SessionPanel::onStateChanged);
+    connect(mgr_, &SessionManager::peerJoined,   this, &SessionPanel::onPeerJoined);
+    connect(mgr_, &SessionManager::peerLeft,      this, &SessionPanel::onPeerLeft);
 
     mgr_->startBrowsing();
 }
@@ -140,16 +115,6 @@ void SessionPanel::onStateChanged(SessionManager::State state) {
                 .arg(mgr_->localRole() == SessionRole::Admin ? "Admin" : "User"));
             break;
     }
-}
-
-void SessionPanel::onBrowsedSessionsChanged(QList<DiscoveredSession> sessions) {
-    sessionsView_->clear();
-    for (const auto& s : sessions) {
-        auto* item = new QListWidgetItem(s.name);
-        item->setData(Qt::UserRole, QVariant::fromValue(s));
-        sessionsView_->addItem(item);
-    }
-    joinBtn_->setEnabled(false);
 }
 
 void SessionPanel::onPeerJoined(SessionPeer peer) {
