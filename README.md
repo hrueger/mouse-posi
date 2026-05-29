@@ -60,6 +60,7 @@ Projects are saved as `.onpoint` JSON files (**File → Save Project**) and stor
 | CMake                    | ≥ 3.25  | `brew install cmake`                                                                                                                |
 | Qt 6                     | ≥ 6.4   | `brew install qt`                                                                                                                   |
 | OpenCV                   | ≥ 4     | `brew install opencv`                                                                                                               |
+| libarchive               | ≥ 3.5   | `brew install libarchive`                                                                                                            |
 | NDI SDK for Apple        | 6.x     | [ndi.video](https://ndi.video/for-developers/ndi-sdk/) → macOS                                                                      |
 | Blackmagic DeckLink SDK  | 16.x    | [blackmagicdesign.com](https://www.blackmagicdesign.com/developer/product/capture-and-playback) — headers bundled in `third_party/` |
 
@@ -72,6 +73,7 @@ Projects are saved as `.onpoint` JSON files (**File → Save Project**) and stor
 | CMake                     | ≥ 3.25  | `winget install Kitware.CMake`                                                                                                     |
 | Qt 6                      | 6.8.3   | `pip install aqtinstall` then `python -m aqt install-qt windows desktop 6.8.3 win64_msvc2022_64 -m qtmultimedia --outputdir C:\Qt` |
 | OpenCV                    | ≥ 4     | via vcpkg: `vcpkg install opencv:x64-windows`                                                                                      |
+| libarchive                | ≥ 3.5   | via vcpkg: `vcpkg install libarchive:x64-windows`                                                                                   |
 | NDI SDK for Windows       | 6.x     | [ndi.video](https://ndi.video/for-developers/ndi-sdk/) → Windows                                                                   |
 | Blackmagic DeckLink SDK   | 16.x    | headers in `third_party/decklink/Win/include/`                                                                                     |
 | Apple Bonjour SDK         | any     | [developer.apple.com](https://developer.apple.com/download/all/?q=Bonjour+SDK+for+Windows)                                         |
@@ -81,7 +83,7 @@ Projects are saved as `.onpoint` JSON files (**File → Save Project**) and stor
 **macOS**
 
 ```bash
-brew install cmake qt opencv
+brew install cmake qt opencv libarchive
 cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --parallel
 open build/onpoint.app

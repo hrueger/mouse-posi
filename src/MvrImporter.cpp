@@ -2,12 +2,49 @@
 
 #include <QFile>
 #include <QMatrix4x4>
-#include <QtCore/private/qzipreader_p.h>
+#include <archive.h>
+#include <archive_entry.h>
 
 #include "Include/VectorworksMVR.h"
 #include "cgltf.h"
 
 using namespace VectorworksMVR;
+
+// ─── ZIP file reading (libarchive) ───────────────────────────────────────────
+
+static QByteArray readFileFromZip(const QString& zipPath, const QString& fileName)
+{
+    struct archive* a = archive_read_new();
+    archive_read_support_format_zip(a);
+    archive_read_support_filter_all(a);
+
+    const QByteArray utf8ZipPath = zipPath.toUtf8();
+    const QByteArray utf8FileName = fileName.toUtf8();
+
+    if (archive_read_open_filename(a, utf8ZipPath.constData(), 10240) != ARCHIVE_OK) {
+        archive_read_free(a);
+        return QByteArray();
+    }
+
+    QByteArray result;
+    struct archive_entry* entry;
+    while (archive_read_next_header(a, &entry) == ARCHIVE_OK) {
+        if (archive_entry_pathname(entry) == utf8FileName) {
+            size_t size = archive_entry_size(entry);
+            char* buffer = new char[size];
+            if (archive_read_data(a, buffer, size) > 0) {
+                result = QByteArray::fromRawData(buffer, size);
+                result.detach();
+            }
+            delete[] buffer;
+            break;
+        }
+        archive_read_data_skip(a);
+    }
+
+    archive_read_free(a);
+    return result;
+}
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -204,12 +241,12 @@ static QVector<MvrMesh> loadGlb(const QByteArray& data, const QMatrix4x4& xform)
 
 static void appendGeometryFromReference(IGeometryReference* geomRef,
                                         const QMatrix4x4& xform,
-                                        const QZipReader& zip,
+                                        const QString& zipPath,
                                         MvrObject& outObject);
 
 static void appendGeometryFromSymDef(ISymDef* symDef,
                                      const QMatrix4x4& xform,
-                                     const QZipReader& zip,
+                                     const QString& zipPath,
                                      MvrObject& outObject)
 {
     if (!symDef) return;
@@ -222,13 +259,13 @@ static void appendGeometryFromSymDef(ISymDef* symDef,
         if (symDef->GetGeometryAt(index, &geomRef) != kVCOMError_NoError || !geomRef) {
             continue;
         }
-        appendGeometryFromReference(geomRef, xform, zip, outObject);
+        appendGeometryFromReference(geomRef, xform, zipPath, outObject);
     }
 }
 
 static void appendGeometryFromReference(IGeometryReference* geomRef,
                                         const QMatrix4x4& xform,
-                                        const QZipReader& zip,
+                                        const QString& zipPath,
                                         MvrObject& outObject)
 {
     if (!geomRef) return;
@@ -245,7 +282,7 @@ static void appendGeometryFromReference(IGeometryReference* geomRef,
     if (isSymbol) {
         ISymDefPtr symDef;
         if (geomRef->GetSymDef(&symDef) == kVCOMError_NoError && symDef) {
-            appendGeometryFromSymDef(symDef, localXform, zip, outObject);
+            appendGeometryFromSymDef(symDef, localXform, zipPath, outObject);
         }
         return;
     }
@@ -258,7 +295,7 @@ static void appendGeometryFromReference(IGeometryReference* geomRef,
     if (geometryFile.open(QIODevice::ReadOnly)) {
         glbData = geometryFile.readAll();
     } else {
-        glbData = zip.fileData(fileName);
+        glbData = readFileFromZip(zipPath, fileName);
     }
     for (MvrMesh& mesh : loadGlb(glbData, localXform)) {
         outObject.meshes.append(std::move(mesh));
@@ -267,7 +304,7 @@ static void appendGeometryFromReference(IGeometryReference* geomRef,
 
 static void appendGeometryFromSceneObject(ISceneObj* sceneObj,
                                           const QMatrix4x4& xform,
-                                          const QZipReader& zip,
+                                          const QString& zipPath,
                                           MvrObject& outObject)
 {
     if (!sceneObj) return;
@@ -280,12 +317,12 @@ static void appendGeometryFromSceneObject(ISceneObj* sceneObj,
         if (sceneObj->GetGeometryAt(index, &geomRef) != kVCOMError_NoError || !geomRef) {
             continue;
         }
-        appendGeometryFromReference(geomRef, xform, zip, outObject);
+        appendGeometryFromReference(geomRef, xform, zipPath, outObject);
     }
 }
 
 static MvrObject readSceneObject(ISceneObj* sceneObj,
-                                 const QZipReader& zip)
+                                 const QString& zipPath)
 {
     MvrObject outObject;
     if (!sceneObj) return outObject;
@@ -302,7 +339,7 @@ static MvrObject readSceneObject(ISceneObj* sceneObj,
     if (sceneObj->GetTransfromMatrix(matrix) == kVCOMError_NoError) {
         const QMatrix4x4 xform = mvrToViewMatrix(matrix);
         outObject.positionM = positionFromMatrix(matrix);
-        appendGeometryFromSceneObject(sceneObj, xform, zip, outObject);
+        appendGeometryFromSceneObject(sceneObj, xform, zipPath, outObject);
     }
 
     if (outObject.type == MvrObject::Type::Fixture) {
@@ -328,11 +365,11 @@ static MvrObject readSceneObject(ISceneObj* sceneObj,
 static void collectLayerObjects(IMediaRessourceVectorInterfacePtr& mvr,
                                 ISceneObj* firstObject,
                                 QList<MvrObject>& out,
-                                const QZipReader& zip)
+                                const QString& zipPath)
 {
     ISceneObjPtr object = firstObject;
     while (object) {
-        MvrObject current = readSceneObject(object, zip);
+        MvrObject current = readSceneObject(object, zipPath);
         ISceneObjPtr child;
         const bool hasChildren = (mvr->GetFirstChild(object, &child) == kVCOMError_NoError && child);
 
@@ -345,7 +382,7 @@ static void collectLayerObjects(IMediaRessourceVectorInterfacePtr& mvr,
         }
 
         if (hasChildren) {
-            collectLayerObjects(mvr, child, out, zip);
+            collectLayerObjects(mvr, child, out, zipPath);
         }
 
         ISceneObjPtr next;
@@ -375,12 +412,6 @@ MvrImporter::ParseResult MvrImporter::parse(const QString& filePath)
         return result;
     }
 
-    QZipReader zip(filePath);
-    if (zip.status() != QZipReader::NoError) {
-        result.error = QStringLiteral("Cannot open MVR file contents");
-        return result;
-    }
-
     ISceneObjPtr layer;
     if (mvr->GetFirstLayer(&layer) != kVCOMError_NoError) {
         result.error = QStringLiteral("libMVRgdtf failed to read the scene layers");
@@ -393,7 +424,7 @@ MvrImporter::ParseResult MvrImporter::parse(const QString& filePath)
 
         ISceneObjPtr child;
         if (mvr->GetFirstChild(layer, &child) == kVCOMError_NoError && child) {
-            collectLayerObjects(mvr, child, layerInfo.objects, zip);
+            collectLayerObjects(mvr, child, layerInfo.objects, filePath);
         }
 
         result.layers.append(layerInfo);

@@ -19,9 +19,20 @@ if(APPLE)
     set(Qt6Multimedia_DIR "/opt/homebrew/opt/qtmultimedia/lib/cmake/Qt6Multimedia" CACHE PATH "")
 endif()
 
-find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Network Concurrent Svg Multimedia OpenGL OpenGLWidgets Xml)
-find_package(Qt6CorePrivate REQUIRED)
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Network Concurrent Svg Multimedia OpenGL OpenGLWidgets)
 find_package(OpenCV REQUIRED COMPONENTS core calib3d imgproc)
+
+if(APPLE)
+    set(LibArchive_INCLUDE_DIR "/opt/homebrew/opt/libarchive/include")
+    set(LibArchive_LIBRARY "/opt/homebrew/opt/libarchive/lib/libarchive.dylib")
+else()
+    find_path(LibArchive_INCLUDE_DIR archive.h)
+    find_library(LibArchive_LIBRARY archive)
+endif()
+if(NOT EXISTS "${LibArchive_INCLUDE_DIR}/archive.h" OR NOT EXISTS "${LibArchive_LIBRARY}")
+    message(FATAL_ERROR "libarchive not found. Install with: brew install libarchive (macOS) or apt-get install libarchive-dev (Linux)")
+endif()
+message(STATUS "Found libarchive: ${LibArchive_LIBRARY}")
 
 # Derive Qt install prefix — needed to locate auxiliary artifacts on Apple
 # (static camera-permission plugin).
@@ -218,12 +229,12 @@ target_include_directories(onpoint PRIVATE
     third_party/libe131
     third_party/cgltf
     ${OpenCV_INCLUDE_DIRS}
+    ${LibArchive_INCLUDE_DIR}
     ${libmvrgdtf_SOURCE_DIR}/src
 )
 
 target_link_libraries(onpoint PRIVATE
     Qt6::Core
-    Qt6::CorePrivate
     Qt6::Gui
     Qt6::Widgets
     Qt6::Network
@@ -231,8 +242,8 @@ target_link_libraries(onpoint PRIVATE
     Qt6::Multimedia
     Qt6::OpenGL
     Qt6::OpenGLWidgets
-    Qt6::Xml
     ${OpenCV_LIBS}
+    ${LibArchive_LIBRARY}
     qlementine
     MvrGdtf
 )

@@ -36,7 +36,7 @@ jobs:
             brew-${{ runner.os }}-
 
       - name: Install Homebrew dependencies
-        run: brew install cmake qt opencv
+        run: brew install cmake qt opencv libarchive
 
       - name: Install NDI SDK
         run: |
@@ -171,9 +171,9 @@ jobs:
           path: ~\AppData\Local\vcpkg\archives
           key: vcpkg-opencv4-x64-windows-v2
 
-      - name: Install OpenCV via vcpkg
+      - name: Install OpenCV and libarchive via vcpkg
         shell: pwsh
-        run: vcpkg install "opencv4:x64-windows" --no-print-usage
+        run: vcpkg install "opencv4:x64-windows" "libarchive:x64-windows" --no-print-usage
 
       - name: Save vcpkg binary cache
         if: always()
@@ -291,6 +291,7 @@ jobs:
             libxcb-cursor0 \
             libxcb-cursor-dev \
             libopencv-dev \
+            libarchive-dev \
             libavahi-compat-libdnssd-dev
 
       - name: Install Qt
