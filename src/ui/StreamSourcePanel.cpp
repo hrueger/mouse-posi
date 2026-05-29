@@ -112,8 +112,11 @@ StreamSourcePanel::StreamSourcePanel(NdiReceiver* ndi, QWidget* parent)
 
     if (ndi_) {
         connect(ndi_, &NdiReceiver::sourcesChanged, this, [this](QStringList sources) {
-            ndiSources_ = sources;
-            rebuildCombo();
+            // Only rebuild if sources actually changed
+            if (sources != ndiSources_) {
+                ndiSources_ = sources;
+                rebuildCombo();
+            }
         });
     }
 

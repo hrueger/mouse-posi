@@ -5,6 +5,7 @@
 #include <QTimer>
 #include <QLabel>
 #include <QPushButton>
+#include <QProgressBar>
 #include <QMap>
 #include <QList>
 #include <QElapsedTimer>
@@ -17,6 +18,7 @@
 #include "Project.h"
 #include "Calibration.h"
 #include "MvrImporter.h"
+#include "ProjectWorker.h"
 
 class VideoWidget;
 class NdiReceiver;
@@ -66,6 +68,11 @@ private slots:
     void onOpenProject();
     void onSaveProject();
     void onSaveProjectAs();
+    void onSaveFinished();
+    void onSaveFailed(const QString& error);
+    void onLoadFinished(const Project& project);
+    void onLoadFailed(const QString& error);
+    void onWorkerProgress(int percent);
 
 private:
     void selectTracker(int id);
@@ -150,6 +157,7 @@ private:
     QLabel*       statusSession_;
     QLabel*       statusPsnOut_;
     QLabel*       statusSacnIn_;
+    QProgressBar* saveLoadProgressBar_ = nullptr;
     QPushButton*  leaveSessionBtn_;
 
     bool projectDirty_    = false;
@@ -191,4 +199,8 @@ private:
     enum class VideoSourceKind { Ndi, Webcam, DeckLink };
     VideoSourceKind videoSourceKind_ = VideoSourceKind::Ndi;
     QString         videoSourceName_;
+
+    ProjectWorker* projectWorker_ = nullptr;
+    QThread*       workerThread_ = nullptr;
+    bool           isSavingOrLoading_ = false;
 };

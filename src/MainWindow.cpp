@@ -34,6 +34,7 @@
 #include <QLabel>
 #include <QMessageBox>
 #include <QPushButton>
+#include <QProgressBar>
 #include <QShortcut>
 #include <oclero/qlementine/widgets/AboutDialog.hpp>
 #include <QDir>
@@ -517,6 +518,17 @@ MainWindow::MainWindow(NdiReceiver* ndi,
     statusBar()->addPermanentWidget(leaveSessionBtn_);
     statusBar()->addPermanentWidget(statusSession_);
 
+    // ── Save/Load progress bar ────────────────────────────────────────────
+    saveLoadProgressBar_ = new QProgressBar;
+    saveLoadProgressBar_->setMinimumWidth(150);
+    saveLoadProgressBar_->setMaximumWidth(250);
+    saveLoadProgressBar_->setMaximumHeight(16);
+    saveLoadProgressBar_->setRange(0, 100);
+    saveLoadProgressBar_->setVisible(false);
+    saveLoadProgressBar_->setStyleSheet("QProgressBar { border: 1px solid palette(mid); border-radius: 2px; text-align: center; }"
+                                        "QProgressBar::chunk { background-color: #3399ff; }");
+    statusBar()->addPermanentWidget(saveLoadProgressBar_);
+
     // ── Signal wiring ─────────────────────────────────────────────────────
     connect(ndi_, &NdiReceiver::frameReady, this, &MainWindow::onFrameReady);
     connect(webcam_, &WebcamCapture::frameReady, this, &MainWindow::onWebcamFrameReady);
@@ -831,17 +843,7 @@ MainWindow::MainWindow(NdiReceiver* ndi,
         for (const auto& path : recentProjects()) {
             auto* a = recentMenu->addAction(path);
             connect(a, &QAction::triggered, this, [this, path]() {
-                try {
-                    Project p = Project::load(path);
-                    projectPath_ = path;
-                    loadProject(p);
-                    saveRecent(path);
-                    markSaved();
-                } catch (const std::exception& e) {
-                    QMessageBox::critical(this, "Invalid Showfile",
-                        QString("Could not open \"%1\":\n\n%2")
-                            .arg(QFileInfo(path).fileName(), QString::fromStdString(e.what())));
-                }
+                openRecentProject(path);
             });
         }
     });
@@ -943,6 +945,19 @@ MainWindow::MainWindow(NdiReceiver* ndi,
         sessionMgr_->joinSession(session.host, session.port, peerName);
     });
 
+    // ── Async project save/load worker ────────────────────────────────────
+    workerThread_ = new QThread(this);
+    projectWorker_ = new ProjectWorker;
+    projectWorker_->moveToThread(workerThread_);
+    connect(workerThread_, &QThread::finished, projectWorker_, &QObject::deleteLater);
+    connect(projectWorker_, &ProjectWorker::saveFinished, this, &MainWindow::onSaveFinished);
+    connect(projectWorker_, &ProjectWorker::saveFailed, this, &MainWindow::onSaveFailed);
+    connect(projectWorker_, &ProjectWorker::loadFinished, this, &MainWindow::onLoadFinished);
+    connect(projectWorker_, &ProjectWorker::loadFailed, this, &MainWindow::onLoadFailed);
+    connect(projectWorker_, &ProjectWorker::progress, this, &MainWindow::onWorkerProgress);
+
+    workerThread_->start();
+
     showWelcomeScreen();
     updateSessionStatus();
 }
@@ -992,19 +1007,13 @@ void MainWindow::showWorkspace()
 
 void MainWindow::openRecentProject(const QString& path)
 {
-    try {
-        Project p = Project::load(path);
-        showWorkspace();
-        projectPath_ = path;
-        loadProject(p);
-        saveRecent(path);
-        updateWindowTitle();
-        markSaved();
-    } catch (const std::exception& e) {
-        QMessageBox::critical(this, "Invalid Showfile",
-            QString("Could not open \"%1\":\n\n%2")
-                .arg(QFileInfo(path).fileName(), QString::fromStdString(e.what())));
-    }
+    if (isSavingOrLoading_) return;
+
+    isSavingOrLoading_ = true;
+    setCursor(Qt::WaitCursor);
+    projectPath_ = path;
+    showWorkspace();
+    projectWorker_->loadAsync(path);
 }
 
 MainWindow::~MainWindow() {
@@ -1017,6 +1026,11 @@ MainWindow::~MainWindow() {
     }, Qt::BlockingQueuedConnection);
     sacnThread_->quit();
     sacnThread_->wait();
+    // Stop the project worker thread
+    if (workerThread_) {
+        workerThread_->quit();
+        workerThread_->wait();
+    }
     psnReceiver_->stop();
     ndi_->stop();
     psnReceiver_->wait();
@@ -1123,6 +1137,9 @@ void MainWindow::loadProject(const Project& p) {
 }
 
 void MainWindow::setNdiSource(const QString& source) {
+    bool changed = (project_.ndiSource != source || project_.videoSourceType != "ndi");
+    log(QString("setNdiSource('%1') - changed=%2").arg(source).arg(changed));
+
     project_.ndiSource     = source;
     project_.videoSourceType = "ndi";
 
@@ -1135,11 +1152,17 @@ void MainWindow::setNdiSource(const QString& source) {
     statusNdi_->setText(source.isEmpty() ? "No NDI source" : "NDI: " + source + " (connecting…)");
     streamPanel_->setCurrentNdiSource(source);
     video_->setNdiSourceConfigured(!source.isEmpty());
-    markDirty();
+
+    if (changed) {
+        markDirty();
+    }
 }
 
 void MainWindow::setWebcamSource(const QString& device) {
 #if WEBCAM_AVAILABLE
+    bool changed = (project_.videoSourceType != "webcam" || videoSourceName_ != device);
+    log(QString("setWebcamSource('%1') - changed=%2").arg(device).arg(changed));
+
     videoSourceKind_ = VideoSourceKind::Webcam;
     videoSourceName_ = device;
     project_.videoSourceType = "webcam";
@@ -1153,7 +1176,10 @@ void MainWindow::setWebcamSource(const QString& device) {
 
     statusNdi_->setText(device.isEmpty() ? "No webcam" : "Webcam: " + device + " (starting…)");
     video_->setNdiSourceConfigured(!device.isEmpty());
-    markDirty();
+
+    if (changed) {
+        markDirty();
+    }
 #else
     (void)device;
     statusNdi_->setText("Webcam support unavailable (install Qt Multimedia)");
@@ -1164,6 +1190,11 @@ void MainWindow::setWebcamSource(const QString& device) {
 void MainWindow::setDecklinkSource(const QString& deviceId, const QString& connection,
                                    uint32_t displayMode, bool allow10Bit) {
 #if defined(DECKLINK_AVAILABLE) && DECKLINK_AVAILABLE
+    bool changed = (project_.videoSourceType != "decklink" || project_.decklinkDevice != deviceId ||
+                    project_.decklinkConnection != connection || project_.decklinkDisplayMode != displayMode ||
+                    project_.decklinkAllow10Bit != allow10Bit);
+    log(QString("setDecklinkSource('%1') - changed=%2").arg(deviceId).arg(changed));
+
     videoSourceKind_              = VideoSourceKind::DeckLink;
     videoSourceName_              = deviceId;
     project_.videoSourceType      = "decklink";
@@ -1192,7 +1223,10 @@ void MainWindow::setDecklinkSource(const QString& deviceId, const QString& conne
 
     statusNdi_->setText(deviceId.isEmpty() ? "No DeckLink device" : "DeckLink: " + deviceId + " (starting…)");
     video_->setNdiSourceConfigured(!deviceId.isEmpty());
-    markDirty();
+
+    if (changed) {
+        markDirty();
+    }
 #else
     (void)deviceId; (void)connection; (void)displayMode; (void)allow10Bit;
     statusNdi_->setText("DeckLink support unavailable");
@@ -1445,7 +1479,9 @@ void MainWindow::updateSaveStatus() {
 }
 
 void MainWindow::markDirty() {
-    if (applyingProject_) return;
+    if (applyingProject_) {
+        return;
+    }
     if (!projectDirty_) {
         projectDirty_ = true;
         updateSaveStatus();
@@ -1541,6 +1577,8 @@ void MainWindow::onNewProject() {
 }
 
 void MainWindow::onOpenProject() {
+    if (isSavingOrLoading_) return;
+
     showWorkspace();
     QFileDialog::Options opts;
 #ifdef Q_OS_MAC
@@ -1549,29 +1587,28 @@ void MainWindow::onOpenProject() {
     QString path = QFileDialog::getOpenFileName(
         this, "Open Project", QDir::homePath(), "OnPoint Projects (*.onpoint)", nullptr, opts);
     if (path.isEmpty()) return;
-    try {
-        Project p = Project::load(path);
-        projectPath_ = path;
-        loadProject(p);
-        saveRecent(path);
-        updateWindowTitle();
-        markSaved();
-    } catch (const std::exception& e) {
-        QMessageBox::critical(this, "Invalid Showfile",
-            QString("Could not open \"%1\":\n\n%2")
-                .arg(QFileInfo(path).fileName(), QString::fromStdString(e.what())));
-    }
+
+    isSavingOrLoading_ = true;
+    setCursor(Qt::WaitCursor);
+    projectPath_ = path;
+    projectWorker_->loadAsync(path);
 }
 
 void MainWindow::onSaveProject() {
     if (projectPath_.isEmpty()) { onSaveProjectAs(); return; }
+    if (isSavingOrLoading_) return;
+
+    isSavingOrLoading_ = true;
+    setCursor(Qt::WaitCursor);
+    actSaveProject_->setEnabled(false);
+
     project_.stage3dCamera = stage3DPanel_->getCameraState();
-    project_.save(projectPath_);
-    updateWindowTitle();
-    markSaved();
+    projectWorker_->saveAsync(project_, projectPath_);
 }
 
 void MainWindow::onSaveProjectAs() {
+    if (isSavingOrLoading_) return;
+
     QFileDialog::Options opts;
 #ifdef Q_OS_MAC
     opts |= QFileDialog::DontUseNativeDialog;
@@ -1583,12 +1620,72 @@ void MainWindow::onSaveProjectAs() {
         this, "Save Project", defaultName,
         "OnPoint Projects (*.onpoint)", nullptr, opts);
     if (path.isEmpty()) return;
+
+    isSavingOrLoading_ = true;
+    setCursor(Qt::WaitCursor);
+    actSaveProject_->setEnabled(false);
+
     projectPath_ = path;
     project_.stage3dCamera = stage3DPanel_->getCameraState();
-    project_.save(path);
+    projectWorker_->saveAsync(project_, path);
     saveRecent(path);
+}
+
+void MainWindow::onSaveFinished() {
+    isSavingOrLoading_ = false;
+    setCursor(Qt::ArrowCursor);
+    actSaveProject_->setEnabled(true);
+    if (saveLoadProgressBar_) saveLoadProgressBar_->setVisible(false);
     updateWindowTitle();
     markSaved();
+}
+
+void MainWindow::onSaveFailed(const QString& error) {
+    isSavingOrLoading_ = false;
+    setCursor(Qt::ArrowCursor);
+    actSaveProject_->setEnabled(true);
+    if (saveLoadProgressBar_) saveLoadProgressBar_->setVisible(false);
+    QMessageBox::critical(this, "Save Error",
+        QString("Could not save project:\n\n%1").arg(error));
+}
+
+void MainWindow::onLoadFinished(const Project& project) {
+    isSavingOrLoading_ = false;
+    setCursor(Qt::ArrowCursor);
+    if (saveLoadProgressBar_) saveLoadProgressBar_->setVisible(false);
+
+    // Set applyingProject temporarily to prevent UI updates from marking as dirty during load
+    bool wasApplying = applyingProject_;
+    applyingProject_ = true;
+    loadProject(project);
+
+    saveRecent(projectPath_);
+    updateWindowTitle();
+    markSaved();
+
+    // Restore applyingProject_ after current event has been processed to catch any deferred signals
+    QMetaObject::invokeMethod(this, [this, wasApplying]() {
+        applyingProject_ = wasApplying;
+    }, Qt::QueuedConnection);
+}
+
+void MainWindow::onLoadFailed(const QString& error) {
+    isSavingOrLoading_ = false;
+    setCursor(Qt::ArrowCursor);
+    if (saveLoadProgressBar_) saveLoadProgressBar_->setVisible(false);
+    QMessageBox::critical(this, "Invalid Showfile",
+        QString("Could not open \"%1\":\n\n%2")
+            .arg(QFileInfo(projectPath_).fileName(), error));
+}
+
+void MainWindow::onWorkerProgress(int percent) {
+    if (!saveLoadProgressBar_) return;
+    saveLoadProgressBar_->setValue(percent);
+    if (percent <= 0) {
+        saveLoadProgressBar_->setVisible(false);
+    } else if (!saveLoadProgressBar_->isVisible()) {
+        saveLoadProgressBar_->setVisible(true);
+    }
 }
 
 void MainWindow::saveRecent(const QString& path) {

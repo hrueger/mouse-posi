@@ -40,6 +40,7 @@ private:
 
     NdiReceiver*        ndi_          = nullptr;
     QStringList         ndiSources_;
+    QStringList         lastNdiSources_;  // Cache to detect changes
 
     QComboBox*          masterCombo_  = nullptr;
     QStandardItemModel* comboModel_   = nullptr;

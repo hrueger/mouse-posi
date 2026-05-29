@@ -68,6 +68,7 @@ set(SOURCES
     src/SacnReceiver.cpp
     src/Calibration.cpp
     src/Project.cpp
+    src/ProjectWorker.cpp
     # New sidebar UI
     src/ui/CollapsibleSection.cpp
     src/ui/SidebarWidget.cpp
@@ -100,6 +101,7 @@ set(HEADERS
     src/SacnReceiver.h
     src/Calibration.h
     src/Project.h
+    src/ProjectWorker.h
     src/DnsSdBridge.h
     src/ui/CollapsibleSection.h
     src/ui/SidebarWidget.h
