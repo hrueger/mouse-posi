@@ -13,6 +13,7 @@
 
 // ─── Shader sources ──────────────────────────────────────────────────────────
 
+// Flat-color shader (grid, trackers, stage objects, fixture crosses)
 static const char* kVertSrc = R"(
 #version 330 core
 layout(location = 0) in vec3 aPos;
@@ -25,6 +26,45 @@ static const char* kFragSrc = R"(
 uniform vec4 uColor;
 out vec4 fragColor;
 void main() { fragColor = uColor; }
+)";
+
+// Phong-lit shader for MVR geometry (position + normal interleaved)
+static const char* kLitVertSrc = R"(
+#version 330 core
+layout(location = 0) in vec3 aPos;
+layout(location = 1) in vec3 aNormal;
+uniform mat4 uMVP;
+out vec3 vNormal;
+out vec3 vFragPos;
+void main() {
+    vFragPos  = aPos;
+    vNormal   = aNormal;
+    gl_Position = uMVP * vec4(aPos, 1.0);
+}
+)";
+
+static const char* kLitFragSrc = R"(
+#version 330 core
+in vec3 vNormal;
+in vec3 vFragPos;
+uniform vec4 uColor;
+uniform vec3 uLightDir;   // normalised, world space
+uniform vec3 uViewPos;    // camera position, world space
+out vec4 fragColor;
+void main() {
+    // Flip normal for back-facing fragments (renders inner walls / single-sided
+    // architectural surfaces correctly when viewed from outside).
+    vec3 norm = normalize(gl_FrontFacing ? vNormal : -vNormal);
+    float wrap  = (dot(norm, uLightDir) + 0.4) / 1.4;
+    float light = 0.18 + 0.72 * max(wrap, 0.0);
+
+    vec3 viewDir = normalize(uViewPos - vFragPos);
+    vec3 halfDir = normalize(uLightDir + viewDir);
+    float spec   = pow(max(dot(norm, halfDir), 0.0), 32.0);
+
+    vec3 base  = uColor.rgb * light + vec3(0.06) * spec;
+    fragColor  = vec4(base, uColor.a);
+}
 )";
 
 // ─── Construction / destruction ───────────────────────────────────────────────
@@ -46,10 +86,22 @@ void Stage3DView::cleanup()
     if (context())
         disconnect(context(), &QOpenGLContext::aboutToBeDestroyed, this, &Stage3DView::cleanup);
     makeCurrent();
-    if (vbo_.isCreated()) vbo_.destroy();
-    if (vao_.isCreated()) vao_.destroy();
-    delete shader_;
-    shader_ = nullptr;
+    if (vbo_.isCreated())    vbo_.destroy();
+    if (vao_.isCreated())    vao_.destroy();
+    if (litVbo_.isCreated()) litVbo_.destroy();
+    if (litVao_.isCreated()) litVao_.destroy();
+    if (!mvrGpuCache_.empty()) {
+        for (auto &kv : mvrGpuCache_) {
+            auto &g = kv.second;
+            if (g->vbo.isCreated())     g->vbo.destroy();
+            if (g->vao.isCreated())     g->vao.destroy();
+            if (g->lineIbo.isCreated()) g->lineIbo.destroy();
+            if (g->lineVao.isCreated()) g->lineVao.destroy();
+        }
+        mvrGpuCache_.clear();
+    }
+    delete shader_;    shader_    = nullptr;
+    delete litShader_; litShader_ = nullptr;
     doneCurrent();
 }
 
@@ -73,6 +125,139 @@ void Stage3DView::setTrackerPositions(const QMap<int, QPair<float,float>>& pos,
 {
     trackerPositions_ = pos;
     trackers_         = trackers;
+    update();
+}
+
+void Stage3DView::setMvrImports(const QList<MvrImport>& imports)
+{
+    mvrImports_ = imports;
+
+    // Pre-size litVbo_ to the largest mesh across all imports
+    if (litVbo_.isCreated()) {
+        int maxBytes = 0;
+        for (const auto& import : imports)
+            for (const auto& layer : import.layers)
+                for (const auto& obj : layer.objects)
+                    for (const auto& mesh : obj.meshes) {
+                        const int bytes = mesh.vertices.size() * 6 * int(sizeof(float));
+                        if (bytes > maxBytes) maxBytes = bytes;
+                    }
+        if (maxBytes > litVboCapacity_) {
+            makeCurrent();
+            litVao_.bind();
+            litVbo_.bind();
+            litVbo_.allocate(maxBytes);   // one-time resize — not per-frame
+            litVboCapacity_ = maxBytes;
+            litVbo_.release();
+            litVao_.release();
+            doneCurrent();
+        }
+    }
+
+    // Build GPU-side VBO/VAO cache for MVR meshes across all imports
+    if (litVao_.isCreated()) {
+        // Clear any previous cache
+        if (!mvrGpuCache_.empty()) {
+            makeCurrent();
+            for (auto &kv : mvrGpuCache_) {
+                auto &g = kv.second;
+                if (g->vbo.isCreated())     g->vbo.destroy();
+                if (g->vao.isCreated())     g->vao.destroy();
+                if (g->lineIbo.isCreated()) g->lineIbo.destroy();
+                if (g->lineVao.isCreated()) g->lineVao.destroy();
+            }
+            mvrGpuCache_.clear();
+            doneCurrent();
+        }
+
+        // Create GPU buffers for each mesh from all imports
+        makeCurrent();
+        for (const auto &import : imports) {
+            for (const auto &layer : import.layers) {
+                for (const auto &obj : layer.objects) {
+                    for (const auto &mesh : obj.meshes) {
+                        const MvrMesh* key = &mesh;
+                        if (mvrGpuCache_.find(key) != mvrGpuCache_.end()) continue;
+                        auto gm = std::make_unique<GpuMvrMesh>();
+                        // Interleaved pos(3)+normal(3)
+                        const int n = mesh.vertices.size();
+                        QVector<float> buf;
+                        buf.reserve(n * 6);
+                        const bool hasNormals = (mesh.normals.size() == n);
+                        for (int i = 0; i < n; ++i) {
+                            const QVector3D& p = mesh.vertices[i];
+                            const QVector3D nm = hasNormals ? mesh.normals[i] : QVector3D(0,1,0);
+                            buf << p.x() << p.y() << p.z() << nm.x() << nm.y() << nm.z();
+                        }
+
+                        gm->vertexCount = n;
+                        gm->vbo.create();
+                        gm->vbo.bind();
+                        gm->vbo.allocate(buf.constData(), int(buf.size() * sizeof(float)));
+
+                        gm->vao.create();
+                        gm->vao.bind();
+                        // Bind attributes using the lit shader (program must be bound)
+                        if (litShader_) litShader_->bind();
+                        litShader_->setAttributeBuffer(0, GL_FLOAT, 0, 3, 6 * int(sizeof(float)));
+                        litShader_->setAttributeBuffer(1, GL_FLOAT, 3 * int(sizeof(float)), 3, 6 * int(sizeof(float)));
+                        litShader_->enableAttributeArray(0);
+                        litShader_->enableAttributeArray(1);
+                        if (litShader_) litShader_->release();
+                        gm->vao.release();
+                        gm->vbo.release();
+
+                        // Wireframe: index buffer of triangle edges referencing gm->vbo.
+                        // Triangle soup → 3 edges (6 indices) per triangle.
+                        const int triCount = n / 3;
+                        if (triCount > 0) {
+                            QVector<GLuint> idx;
+                            idx.reserve(triCount * 6);
+                            for (int t = 0; t < triCount; ++t) {
+                                const GLuint a = GLuint(t * 3 + 0);
+                                const GLuint b = GLuint(t * 3 + 1);
+                                const GLuint c = GLuint(t * 3 + 2);
+                                idx << a << b << b << c << c << a;
+                            }
+                            gm->lineIndexCount = idx.size();
+
+                            gm->lineVao.create();
+                            gm->lineVao.bind();
+                            gm->vbo.bind();   // positions live in the interleaved vbo
+                            gm->lineIbo.create();
+                            gm->lineIbo.bind();
+                            gm->lineIbo.allocate(idx.constData(), int(idx.size() * sizeof(GLuint)));
+                            // Flat shader: position-only attribute 0, stride matches interleaved layout
+                            if (shader_) shader_->bind();
+                            shader_->setAttributeBuffer(0, GL_FLOAT, 0, 3, 6 * int(sizeof(float)));
+                            shader_->enableAttributeArray(0);
+                            if (shader_) shader_->release();
+                            gm->lineVao.release();
+                            gm->lineIbo.release();
+                            gm->vbo.release();
+                        }
+
+                        mvrGpuCache_.emplace(key, std::move(gm));
+                    }
+                }
+            }
+        }
+        doneCurrent();
+    }
+
+    update();
+}
+
+
+void Stage3DView::setShowMvrLabels(bool show)
+{
+    showMvrLabels_ = show;
+    update();
+}
+
+void Stage3DView::setMvrRenderMode(MvrRenderMode mode)
+{
+    mvrRenderMode_ = mode;
     update();
 }
 
@@ -146,6 +331,13 @@ void Stage3DView::initializeGL()
     vbo_.create();
     vbo_.setUsagePattern(QOpenGLBuffer::DynamicDraw);
 
+    litShader_ = new QOpenGLShaderProgram();
+    initLitShader();
+
+    litVao_.create();
+    litVbo_.create();
+    litVbo_.setUsagePattern(QOpenGLBuffer::DynamicDraw);
+
     buildGridGeometry();
 
     glEnable(GL_DEPTH_TEST);
@@ -158,6 +350,13 @@ void Stage3DView::initShaders()
     shader_->addShaderFromSourceCode(QOpenGLShader::Vertex,   kVertSrc);
     shader_->addShaderFromSourceCode(QOpenGLShader::Fragment, kFragSrc);
     shader_->link();
+}
+
+void Stage3DView::initLitShader()
+{
+    litShader_->addShaderFromSourceCode(QOpenGLShader::Vertex,   kLitVertSrc);
+    litShader_->addShaderFromSourceCode(QOpenGLShader::Fragment, kLitFragSrc);
+    litShader_->link();
 }
 
 void Stage3DView::buildGridGeometry()
@@ -180,6 +379,12 @@ void Stage3DView::resizeGL(int w, int h)
 
 void Stage3DView::paintGL()
 {
+    // QPainter/Qt internals may leave GL state altered between frames.
+    // Re-assert depth state so 3D occlusion remains deterministic.
+    glEnable(GL_DEPTH_TEST);
+    glDepthMask(GL_TRUE);
+    glDepthFunc(GL_LEQUAL);
+
     glClearColor(0.13f, 0.13f, 0.15f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
@@ -195,15 +400,16 @@ void Stage3DView::paintGL()
 
     glDisable(GL_BLEND);
     drawTrackers();
+    drawMvrLayers();
     drawDrawingPreview();
     drawCameraMarker();
 
     shader_->release();
 
-    // 2D gizmo overlay — drawn via QPainter at the end of paintGL so it
-    // composites reliably on top of the GL content on all platforms.
+    // 2D overlay drawn via QPainter on top of GL content
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing);
+    drawMvrLabels(p);
     drawGizmoOverlay(p);
 }
 
@@ -594,6 +800,260 @@ void Stage3DView::drawTrackers()
             {x, y-s, z}, {x, y+s, z},
         };
         drawPrimitive(GL_LINES, cross, color);
+    }
+}
+
+void Stage3DView::drawMvrMeshLit(const MvrMesh& mesh)
+{
+    if (mesh.vertices.size() < 3) return;
+
+    const MvrMesh* key = &mesh;
+    auto it = mvrGpuCache_.find(key);
+    if (it != mvrGpuCache_.end()) {
+        // Fast path: use pre-created VAO/VBO and draw without rebuilding buffers
+        auto gm = it->second.get();
+        gm->vao.bind();
+        glDrawArrays(GL_TRIANGLES, 0, gm->vertexCount);
+        gm->vao.release();
+        return;
+    }
+
+    // Fallback: create temporary interleaved buffer and upload (previous behavior)
+    const int n = mesh.vertices.size();
+    const bool hasNormals = (mesh.normals.size() == n);
+    QVector<float> buf;
+    buf.reserve(n * 6);
+    for (int i = 0; i < n; ++i) {
+        const QVector3D& p = mesh.vertices[i];
+        const QVector3D  nm = hasNormals ? mesh.normals[i] : QVector3D(0, 1, 0);
+        buf << p.x() << p.y() << p.z() << nm.x() << nm.y() << nm.z();
+    }
+
+    litVao_.bind();
+    litVbo_.bind();
+    const int bytesNeeded = buf.size() * int(sizeof(float));
+    if (bytesNeeded <= litVboCapacity_) {
+        litVbo_.write(0, buf.constData(), bytesNeeded);
+    } else {
+        litVbo_.allocate(buf.constData(), bytesNeeded);
+        litVboCapacity_ = bytesNeeded;
+    }
+
+    const int stride = 6 * int(sizeof(float));
+    litShader_->setAttributeBuffer(0, GL_FLOAT, 0,              3, stride);
+    litShader_->setAttributeBuffer(1, GL_FLOAT, 3*sizeof(float), 3, stride);
+    litShader_->enableAttributeArray(0);
+    litShader_->enableAttributeArray(1);
+
+    glDrawArrays(GL_TRIANGLES, 0, n);
+
+    litShader_->disableAttributeArray(0);
+    litShader_->disableAttributeArray(1);
+    litVbo_.release();
+    litVao_.release();
+}
+
+// Draws a mesh as wireframe (GL_LINES) using the flat shader_.
+// Caller must have shader_ bound and uMVP/uColor uniforms set.
+void Stage3DView::drawMvrMeshWireframe(const MvrMesh& mesh)
+{
+    if (mesh.vertices.size() < 3) return;
+
+    const MvrMesh* key = &mesh;
+    auto it = mvrGpuCache_.find(key);
+    if (it != mvrGpuCache_.end() && it->second->lineIndexCount > 0) {
+        // Fast path: indexed line edges referencing the cached vertex buffer.
+        auto gm = it->second.get();
+        gm->lineVao.bind();
+        glDrawElements(GL_LINES, gm->lineIndexCount, GL_UNSIGNED_INT, nullptr);
+        gm->lineVao.release();
+        return;
+    }
+
+    // Fallback (cache not built yet): rebuild the line list and upload.
+    const int tc = mesh.vertices.size() / 3;
+    QVector<QVector3D> lines;
+    lines.reserve(tc * 6);
+    for (int t = 0; t < tc; ++t) {
+        const auto& a  = mesh.vertices[t*3+0];
+        const auto& b  = mesh.vertices[t*3+1];
+        const auto& c2 = mesh.vertices[t*3+2];
+        lines << a << b << b << c2 << c2 << a;
+    }
+
+    vao_.bind();
+    vbo_.bind();
+    vbo_.allocate(lines.constData(), int(lines.size() * sizeof(QVector3D)));
+    shader_->setAttributeBuffer(0, GL_FLOAT, 0, 3, sizeof(QVector3D));
+    shader_->enableAttributeArray(0);
+    glDrawArrays(GL_LINES, 0, lines.size());
+    shader_->disableAttributeArray(0);
+    vbo_.release();
+    vao_.release();
+}
+
+
+void Stage3DView::drawMvrLayers()
+{
+    if (mvrImports_.isEmpty()) return;
+
+    const QColor meshColor(160, 165, 185);
+    const QColor fixtureColor(255, 170, 40);
+    const float  s = 0.18f;
+
+    static const QVector3D kLightDir = QVector3D(0.55f, 0.80f, 0.35f).normalized();
+
+    // Render each import with its own offset/rotation
+    for (const MvrImport& import : mvrImports_) {
+        if (!import.enabled || import.layers.isEmpty()) continue;
+
+        // Build offset model matrix for this import (translate + rotate Y)
+        QMatrix4x4 model;
+        model.translate(import.offsetX, import.offsetY, import.offsetZ);
+        if (import.rotDeg != 0.f)
+            model.rotate(import.rotDeg, 0, 1, 0);
+        const QMatrix4x4 offsetMvp = mvpMatrix() * model;
+
+        if (mvrRenderMode_ == MvrRenderMode::Shaded) {
+            shader_->release();
+            litShader_->bind();
+            litShader_->setUniformValue("uMVP",      offsetMvp);
+            litShader_->setUniformValue("uLightDir", kLightDir);
+            litShader_->setUniformValue("uViewPos",  cameraPos());
+
+            for (const MvrLayer& layer : import.layers) {
+                if (!layer.enabled) continue;
+                for (const MvrObject& obj : layer.objects) {
+                    if (!obj.enabled) continue;
+                    for (const MvrMesh& mesh : obj.meshes) {
+                        if (mesh.vertices.size() < 3) continue;
+                        const QColor c = mesh.color;
+                        litShader_->setUniformValue("uColor",
+                            float(c.redF()), float(c.greenF()),
+                            float(c.blueF()), 1.0f);
+                        drawMvrMeshLit(mesh);
+                    }
+                }
+            }
+
+            // Fixture crosses: GL_LINES, switch to flat shader.
+            litShader_->release();
+            shader_->bind();
+            for (const MvrLayer& layer : import.layers) {
+                if (!layer.enabled) continue;
+                for (const MvrObject& obj : layer.objects) {
+                    if (!obj.enabled || obj.type != MvrObject::Type::Fixture) continue;
+                    const float x = obj.positionM.x();
+                    const float y = obj.positionM.y();
+                    const float z = obj.positionM.z();
+                    QVector<QVector3D> cross = {
+                        {x-s,y,z},{x+s,y,z},
+                        {x,y,z-s},{x,y,z+s},
+                        {x,y-s,z},{x,y+s,z},
+                    };
+                    drawPrimitiveEx(GL_LINES, cross, fixtureColor, 1.0f, offsetMvp);
+                }
+            }
+        } else if (mvrRenderMode_ == MvrRenderMode::Wireframe) {
+            glEnable(GL_BLEND);
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+            shader_->setUniformValue("uMVP", offsetMvp);
+            for (const MvrLayer& layer : import.layers) {
+                if (!layer.enabled) continue;
+                for (const MvrObject& obj : layer.objects) {
+                    if (!obj.enabled) continue;
+
+                    for (const MvrMesh& mesh : obj.meshes) {
+                        if (mesh.vertices.size() < 3) continue;
+                        const QColor c = mesh.color;
+                        shader_->setUniformValue("uColor",
+                            QVector4D(c.redF(), c.greenF(), c.blueF(), 0.8f));
+                        drawMvrMeshWireframe(mesh);
+                    }
+
+                    if (obj.type == MvrObject::Type::Fixture) {
+                        const float x = obj.positionM.x();
+                        const float y = obj.positionM.y();
+                        const float z = obj.positionM.z();
+                        QVector<QVector3D> cross = {
+                            {x-s,y,z},{x+s,y,z},
+                            {x,y,z-s},{x,y,z+s},
+                            {x,y-s,z},{x,y+s,z},
+                        };
+                        drawPrimitiveEx(GL_LINES, cross, fixtureColor, 1.0f, offsetMvp);
+                    }
+                }
+            }
+            glDisable(GL_BLEND);
+        } else {
+            glEnable(GL_BLEND);
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+            for (const MvrLayer& layer : import.layers) {
+                if (!layer.enabled) continue;
+                for (const MvrObject& obj : layer.objects) {
+                    if (!obj.enabled) continue;
+
+                    for (const MvrMesh& mesh : obj.meshes) {
+                        if (mesh.vertices.size() < 3) continue;
+                        drawPrimitiveEx(GL_TRIANGLES, mesh.vertices, mesh.color, 0.45f, offsetMvp);
+                    }
+
+                    if (obj.type == MvrObject::Type::Fixture) {
+                        const float x = obj.positionM.x();
+                        const float y = obj.positionM.y();
+                        const float z = obj.positionM.z();
+                        QVector<QVector3D> cross = {
+                            {x-s,y,z},{x+s,y,z},
+                            {x,y,z-s},{x,y,z+s},
+                            {x,y-s,z},{x,y+s,z},
+                        };
+                        drawPrimitiveEx(GL_LINES, cross, fixtureColor, 1.0f, offsetMvp);
+                    }
+                }
+            }
+            glDisable(GL_BLEND);
+        }
+    }
+}
+
+void Stage3DView::drawMvrLabels(QPainter& p) const
+{
+    if (!showMvrLabels_ || mvrImports_.isEmpty()) return;
+
+    p.setFont(QFont(QStringLiteral("Arial"), 8));
+
+    for (const MvrImport& import : mvrImports_) {
+        if (!import.enabled || import.layers.isEmpty()) continue;
+
+        QMatrix4x4 model;
+        model.translate(import.offsetX, import.offsetY, import.offsetZ);
+        if (import.rotDeg != 0.f)
+            model.rotate(import.rotDeg, 0, 1, 0);
+        const QMatrix4x4 mvp = mvpMatrix() * model;
+
+        for (const MvrLayer& layer : import.layers) {
+            if (!layer.enabled) continue;
+            for (const MvrObject& obj : layer.objects) {
+                if (!obj.enabled || obj.name.isEmpty()) continue;
+                if (obj.type != MvrObject::Type::Fixture &&
+                    obj.meshes.isEmpty()) continue;
+
+                const QVector4D clip = mvp * QVector4D(obj.positionM, 1.0f);
+                if (clip.w() <= 0.0f) continue;
+                QVector3D ndc = clip.toVector3DAffine();
+                if (ndc.x() < -1.1f || ndc.x() > 1.1f ||
+                    ndc.y() < -1.1f || ndc.y() > 1.1f) continue;
+
+                const float sx = (ndc.x() + 1.0f) * 0.5f * float(viewW_);
+                const float sy = (1.0f - ndc.y()) * 0.5f * float(viewH_);
+                const QPointF screenPos(sx + 5, sy - 2);
+
+                p.setPen(QColor(0, 0, 0, 160));
+                p.drawText(screenPos + QPointF(1, 1), obj.name);
+                p.setPen(QColor(255, 200, 80));
+                p.drawText(screenPos, obj.name);
+            }
+        }
     }
 }
 

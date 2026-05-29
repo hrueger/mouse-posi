@@ -257,6 +257,15 @@ MainWindow::MainWindow(NdiReceiver* ndi,
         stagePropertiesPanel_->setSelectedObject(-999);
     });
 
+    // Items panel: stage object renamed inline in tree
+    connect(stageItemsPanel_, &StageItemsPanel::objectRenamed,
+            this, [this](int id, const QString& name) {
+        for (auto& o : project_.stageObjects)
+            if (o.id == id) { o.name = name; break; }
+        stagePropertiesPanel_->setAllObjects(systemStageItems_ + project_.stageObjects);
+        markDirty();
+    });
+
     // Items panel: duplicate
     connect(stageItemsPanel_, &StageItemsPanel::duplicateRequested,
             this, [this](int id) {
@@ -295,6 +304,148 @@ MainWindow::MainWindow(NdiReceiver* ndi,
             if (o.id == edited.id) { o = edited; break; }
         }
         syncAllStageObjects(); markDirty();
+    });
+
+    // Stage3DPanel: MVR file imported — each import is a separate root node
+    connect(stage3DPanel_, &Stage3DPanel::mvrImportChanged,
+            this, [this](const MvrImport& import) {
+        mvrImports_.append(import);
+        stage3DPanel_->setMvrImports(mvrImports_);
+        stageItemsPanel_->setMvrImports(mvrImports_);
+        // Convert MvrImport to MvrImportData for storage (including meshes)
+        MvrImportData data;
+        data.name = import.name;
+        data.offsetX = import.offsetX;
+        data.offsetY = import.offsetY;
+        data.offsetZ = import.offsetZ;
+        data.rotDeg = import.rotDeg;
+        data.enabled = import.enabled;
+        for (const auto& layer : import.layers) {
+            MvrLayerData layerData;
+            layerData.name = layer.name;
+            layerData.enabled = layer.enabled;
+            for (const auto& obj : layer.objects) {
+                MvrObjectData objData;
+                objData.name = obj.name;
+                objData.type = MvrObjectData::Type(int(obj.type));
+                objData.positionM = obj.positionM;
+                objData.gdtfSpec = obj.gdtfSpec;
+                objData.unitNumber = obj.unitNumber;
+                objData.dmxAddress = obj.dmxAddress;
+                objData.enabled = obj.enabled;
+                for (const auto& mesh : obj.meshes) {
+                    MvrMeshData meshData;
+                    meshData.vertices = mesh.vertices;
+                    meshData.normals = mesh.normals;
+                    meshData.color = mesh.color;
+                    objData.meshes.append(meshData);
+                }
+                layerData.objects.append(objData);
+            }
+            data.layers.append(layerData);
+        }
+        project_.mvr.imports.append(data);
+        markDirty();
+    });
+
+    // Items panel: layer/object visibility toggled
+    connect(stageItemsPanel_, &StageItemsPanel::mvrVisibilityChanged,
+            this, [this](int ii, int li, int oi, bool visible) {
+        if (ii < 0 || ii >= mvrImports_.size()) return;
+        if (li < 0) {
+            // Root level: li == -1
+            mvrImports_[ii].enabled = visible;
+            if (ii < project_.mvr.imports.size())
+                project_.mvr.imports[ii].enabled = visible;
+        } else if (li >= 0 && li < mvrImports_[ii].layers.size()) {
+            if (oi < 0) {
+                mvrImports_[ii].layers[li].enabled = visible;
+                if (ii < project_.mvr.imports.size() && li < project_.mvr.imports[ii].layers.size())
+                    project_.mvr.imports[ii].layers[li].enabled = visible;
+            } else if (oi < mvrImports_[ii].layers[li].objects.size()) {
+                mvrImports_[ii].layers[li].objects[oi].enabled = visible;
+                if (ii < project_.mvr.imports.size() && li < project_.mvr.imports[ii].layers.size()
+                    && oi < project_.mvr.imports[ii].layers[li].objects.size())
+                    project_.mvr.imports[ii].layers[li].objects[oi].enabled = visible;
+            }
+        }
+        stage3DPanel_->setMvrImports(mvrImports_);
+        markDirty();
+    });
+
+    // Items panel: MVR root renamed inline
+    connect(stageItemsPanel_, &StageItemsPanel::mvrImportRenamed,
+            this, [this](int ii, const QString& name) {
+        if (ii >= 0 && ii < mvrImports_.size()) {
+            mvrImports_[ii].name = name;
+            if (ii < project_.mvr.imports.size())
+                project_.mvr.imports[ii].name = name;
+            markDirty();
+        }
+    });
+
+    // Items panel: MVR import deleted
+    connect(stageItemsPanel_, &StageItemsPanel::mvrImportDeleteRequested,
+            this, [this](int ii) {
+        if (ii >= 0 && ii < mvrImports_.size()) {
+            mvrImports_.removeAt(ii);
+            if (ii < project_.mvr.imports.size())
+                project_.mvr.imports.removeAt(ii);
+            stage3DPanel_->setMvrImports(mvrImports_);
+            stageItemsPanel_->setMvrImports(mvrImports_);
+            stagePropertiesPanel_->setSelectedObject(-999);
+            markDirty();
+        }
+    });
+
+    // Items panel: MVR root selected → show offset/rotation properties
+    connect(stageItemsPanel_, &StageItemsPanel::mvrImportSelected,
+            this, [this](int ii) {
+        if (ii >= 0 && ii < mvrImports_.size())
+            stagePropertiesPanel_->setMvrImport(ii, mvrImports_[ii]);
+    });
+
+    // Properties panel: MVR offset/rotation/name edited — sync fields that the
+    // properties panel owns; leave layer/object visibility state untouched
+    connect(stagePropertiesPanel_, &StagePropertiesPanel::mvrImportEdited,
+            this, [this](int ii, const MvrImport& import) {
+        if (ii >= 0 && ii < mvrImports_.size()) {
+            mvrImports_[ii].name    = import.name;
+            mvrImports_[ii].offsetX = import.offsetX;
+            mvrImports_[ii].offsetY = import.offsetY;
+            mvrImports_[ii].offsetZ = import.offsetZ;
+            mvrImports_[ii].rotDeg  = import.rotDeg;
+            if (ii < project_.mvr.imports.size()) {
+                project_.mvr.imports[ii].name    = import.name;
+                project_.mvr.imports[ii].offsetX = import.offsetX;
+                project_.mvr.imports[ii].offsetY = import.offsetY;
+                project_.mvr.imports[ii].offsetZ = import.offsetZ;
+                project_.mvr.imports[ii].rotDeg  = import.rotDeg;
+            }
+            stage3DPanel_->setMvrImports(mvrImports_);
+            stageItemsPanel_->setMvrImports(mvrImports_);
+            markDirty();
+        }
+    });
+
+    // Items panel: MVR layer/object selected (not the root) → clear properties panel
+    connect(stageItemsPanel_, &StageItemsPanel::mvrChildItemSelected,
+            this, [this]() {
+        stagePropertiesPanel_->setSelectedObject(-999);
+    });
+
+    // Stage3D panel: show MVR labels setting changed
+    connect(stage3DPanel_, &Stage3DPanel::showMvrLabelsChanged,
+            this, [this](bool show) {
+        project_.mvr.showLabels = show;
+        markDirty();
+    });
+
+    // Stage3D panel: MVR render mode changed
+    connect(stage3DPanel_, &Stage3DPanel::mvrRenderModeChanged,
+            this, [this](MvrRenderMode mode) {
+        project_.mvr.renderMode = MvrRenderModeEnum(int(mode));
+        markDirty();
     });
 
     // Items panel: vid / 3D visibility toggled
@@ -1114,6 +1265,48 @@ void MainWindow::applyProject() {
         if (sacnCfg.enabled)
             sacnReceiver_->startListening(sacnCfg);
     });
+
+    // Restore MVR imports (including meshes)
+    mvrImports_.clear();
+    for (const auto& importData : project_.mvr.imports) {
+        MvrImport import;
+        import.name = importData.name;
+        import.offsetX = importData.offsetX;
+        import.offsetY = importData.offsetY;
+        import.offsetZ = importData.offsetZ;
+        import.rotDeg = importData.rotDeg;
+        import.enabled = importData.enabled;
+        for (const auto& layerData : importData.layers) {
+            MvrLayer layer;
+            layer.name = layerData.name;
+            layer.enabled = layerData.enabled;
+            for (const auto& objData : layerData.objects) {
+                MvrObject obj;
+                obj.name = objData.name;
+                obj.type = MvrObject::Type(int(objData.type));
+                obj.positionM = objData.positionM;
+                obj.gdtfSpec = objData.gdtfSpec;
+                obj.unitNumber = objData.unitNumber;
+                obj.dmxAddress = objData.dmxAddress;
+                obj.enabled = objData.enabled;
+                for (const auto& meshData : objData.meshes) {
+                    MvrMesh mesh;
+                    mesh.vertices = meshData.vertices;
+                    mesh.normals = meshData.normals;
+                    mesh.color = meshData.color;
+                    obj.meshes.append(mesh);
+                }
+                layer.objects.append(obj);
+            }
+            import.layers.append(layer);
+        }
+        mvrImports_.append(import);
+    }
+    stage3DPanel_->setMvrImports(mvrImports_);
+    stageItemsPanel_->setMvrImports(mvrImports_);
+    stage3DPanel_->setShowMvrLabels(project_.mvr.showLabels);
+    stage3DPanel_->setMvrRenderMode(MvrRenderMode(int(project_.mvr.renderMode)));
+
     updateCalibStatus();
     applyingProject_ = false;
 }

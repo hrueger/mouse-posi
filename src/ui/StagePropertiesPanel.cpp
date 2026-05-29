@@ -33,7 +33,7 @@ StagePropertiesPanel::StagePropertiesPanel(QWidget* parent) : QWidget(parent)
     propsGroup_ = new QWidget;
     propsForm_  = new QFormLayout(propsGroup_);
     propsForm_->setRowWrapPolicy(QFormLayout::DontWrapRows);
-    propsForm_->setFieldGrowthPolicy(QFormLayout::ExpandingFieldsGrow);
+    propsForm_->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
     propsForm_->setLabelAlignment(Qt::AlignRight);
 
     auto makeSpin = [](double min, double max, double step = 0.05, int dec = 2) {
@@ -45,6 +45,8 @@ StagePropertiesPanel::StagePropertiesPanel(QWidget* parent) : QWidget(parent)
     };
 
     nameLine_     = new QLineEdit;
+    nameLine_->setMinimumWidth(0);
+    nameLine_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
     heightSpin_   = makeSpin(0.0, 20.0); heightSpin_->setSuffix(" m");
     xSpin_        = makeSpin(-100.0, 100.0, 0.1); xSpin_->setSuffix(" m");
     zSpin_        = makeSpin(-100.0, 100.0, 0.1); zSpin_->setSuffix(" m");
@@ -80,12 +82,55 @@ StagePropertiesPanel::StagePropertiesPanel(QWidget* parent) : QWidget(parent)
 
     propsGroup_->hide();
     layout->addWidget(propsGroup_);
+
+    // ── MVR group properties ───────────────────────────────────────────────
+    mvrPropsGroup_ = new QWidget;
+    auto* mvrForm  = new QFormLayout(mvrPropsGroup_);
+    mvrForm->setRowWrapPolicy(QFormLayout::DontWrapRows);
+    mvrForm->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+    mvrForm->setLabelAlignment(Qt::AlignRight);
+
+    auto makeMvrSpin = [](double min, double max, double step = 0.1, int dec = 2) {
+        auto* s = new QDoubleSpinBox;
+        s->setRange(min, max); s->setSingleStep(step); s->setDecimals(dec);
+        return s;
+    };
+
+    mvrNameEdit_    = new QLineEdit;
+    mvrNameEdit_->setMinimumWidth(0);
+    mvrNameEdit_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+    mvrOffsetXSpin_ = makeMvrSpin(-100.0, 100.0); mvrOffsetXSpin_->setSuffix(" m");
+    mvrOffsetYSpin_ = makeMvrSpin(-20.0,  20.0);  mvrOffsetYSpin_->setSuffix(" m");
+    mvrOffsetZSpin_ = makeMvrSpin(-100.0, 100.0); mvrOffsetZSpin_->setSuffix(" m");
+    mvrRotSpin_     = makeMvrSpin(-360.0, 360.0, 1.0, 1); mvrRotSpin_->setSuffix(" °");
+
+    mvrForm->addRow("Name:",      mvrNameEdit_);
+    mvrForm->addRow("Offset X:",  mvrOffsetXSpin_);
+    mvrForm->addRow("Offset Y:",  mvrOffsetYSpin_);
+    mvrForm->addRow("Offset Z:",  mvrOffsetZSpin_);
+    mvrForm->addRow("Rotation:",  mvrRotSpin_);
+
+    mvrPropsGroup_->hide();
+    layout->addWidget(mvrPropsGroup_);
+
     layout->addStretch();
 
     for (auto* s : {heightSpin_, xSpin_, zSpin_, widthSpin_, depthSpin_, rotSpin_, fovSpin_})
         connect(s, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
                 this, &StagePropertiesPanel::onPropertiesChanged);
     connect(nameLine_, &QLineEdit::editingFinished, this, &StagePropertiesPanel::onPropertiesChanged);
+
+    for (auto* s : {mvrOffsetXSpin_, mvrOffsetYSpin_, mvrOffsetZSpin_, mvrRotSpin_})
+        connect(s, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+                this, &StagePropertiesPanel::onMvrPropertiesChanged);
+    connect(mvrNameEdit_, &QLineEdit::editingFinished, this, [this]() {
+        if (updatingForm_) return;
+        const QString newName = mvrNameEdit_->text().trimmed();
+        if (!newName.isEmpty()) {
+            mvrImport_.name = newName;
+            emit mvrImportEdited(mvrImportIndex_, mvrImport_);
+        }
+    });
 }
 
 void StagePropertiesPanel::setAllObjects(const QList<StageObject>& all)
@@ -108,14 +153,47 @@ void StagePropertiesPanel::setHas3DCalibration(bool has3D)
         updatePropertiesForm(-1);
 }
 
+void StagePropertiesPanel::setMvrImport(int index, const MvrImport& import)
+{
+    mvrImportIndex_ = index;
+    mvrImport_  = import;
+    selectedId_ = -999;
+
+    propsGroup_->hide();
+    noSelectionLabel_->hide();
+
+    updatingForm_ = true;
+    mvrNameEdit_->setText(import.name.isEmpty() ? QStringLiteral("MVR Import") : import.name);
+    mvrOffsetXSpin_->setValue(double(import.offsetX));
+    mvrOffsetYSpin_->setValue(double(import.offsetY));
+    mvrOffsetZSpin_->setValue(double(import.offsetZ));
+    mvrRotSpin_->setValue(double(import.rotDeg));
+    updatingForm_ = false;
+
+    mvrPropsGroup_->show();
+}
+
 void StagePropertiesPanel::onPropertiesChanged()
 {
     if (updatingForm_ || selectedId_ == -999) return;
     applyPropertiesToSelected();
 }
 
+void StagePropertiesPanel::onMvrPropertiesChanged()
+{
+    if (updatingForm_) return;
+    mvrImport_.name    = mvrNameEdit_->text();
+    mvrImport_.offsetX = float(mvrOffsetXSpin_->value());
+    mvrImport_.offsetY = float(mvrOffsetYSpin_->value());
+    mvrImport_.offsetZ = float(mvrOffsetZSpin_->value());
+    mvrImport_.rotDeg  = float(mvrRotSpin_->value());
+    emit mvrImportEdited(mvrImportIndex_, mvrImport_);
+}
+
 void StagePropertiesPanel::updatePropertiesForm(int id)
 {
+    mvrPropsGroup_->hide();
+
     if (id == -999) {
         propsGroup_->hide();
         noSelectionLabel_->show();

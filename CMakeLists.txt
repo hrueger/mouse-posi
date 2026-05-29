@@ -19,7 +19,8 @@ if(APPLE)
     set(Qt6Multimedia_DIR "/opt/homebrew/opt/qtmultimedia/lib/cmake/Qt6Multimedia" CACHE PATH "")
 endif()
 
-find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Network Concurrent Svg Multimedia OpenGL OpenGLWidgets)
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Network Concurrent Svg Multimedia OpenGL OpenGLWidgets Xml)
+find_package(Qt6CorePrivate REQUIRED)
 find_package(OpenCV REQUIRED COMPONENTS core calib3d imgproc)
 
 # Derive Qt install prefix — needed to locate auxiliary artifacts on Apple
@@ -39,10 +40,24 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(qlementine)
 
+# ── libMVRgdtf (MVR/GDTF file format) ────────────────────────────────────────
+set(DONT_USE_XERCES_AS_XMLLIB ON  CACHE BOOL "" FORCE)
+set(BUILD_MVR_XCHANGE         OFF CACHE BOOL "" FORCE)
+set(UNITTEST                  OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(
+    libmvrgdtf
+    GIT_REPOSITORY https://github.com/mvrdevelopment/libMVRgdtf.git
+    GIT_TAG        master
+    GIT_SHALLOW    TRUE
+)
+FetchContent_MakeAvailable(libmvrgdtf)
+
 
 set(SOURCES
     src/resources.qrc
     src/main.cpp
+    src/MvrImporter.cpp
+    src/cgltf_impl.cpp
     src/MainWindow.cpp
     src/VideoWidget.cpp
     src/NdiReceiver.cpp
@@ -66,6 +81,7 @@ set(SOURCES
     src/ui/Stage3DView.cpp
     src/ui/Stage3DPanel.cpp
     src/ui/StageItemsPanel.cpp
+    src/ui/MvrImportDialog.cpp
     src/ui/StagePropertiesPanel.cpp
     src/ui/WelcomeScreen.cpp
     # Session management
@@ -74,6 +90,7 @@ set(SOURCES
 
 set(HEADERS
     src/MainWindow.h
+    src/MvrImporter.h
     src/VideoWidget.h
     src/NdiReceiver.h
     src/WebcamCapture.h
@@ -96,6 +113,7 @@ set(HEADERS
     src/ui/Stage3DView.h
     src/ui/Stage3DPanel.h
     src/ui/StageItemsPanel.h
+    src/ui/MvrImportDialog.h
     src/ui/StagePropertiesPanel.h
     src/ui/WelcomeScreen.h
     src/SessionManager.h
@@ -196,11 +214,14 @@ set_source_files_properties(third_party/libe131/e131.c PROPERTIES LANGUAGE C)
 target_include_directories(onpoint PRIVATE
     src
     third_party/libe131
+    third_party/cgltf
     ${OpenCV_INCLUDE_DIRS}
+    ${libmvrgdtf_SOURCE_DIR}/src
 )
 
 target_link_libraries(onpoint PRIVATE
     Qt6::Core
+    Qt6::CorePrivate
     Qt6::Gui
     Qt6::Widgets
     Qt6::Network
@@ -208,8 +229,10 @@ target_link_libraries(onpoint PRIVATE
     Qt6::Multimedia
     Qt6::OpenGL
     Qt6::OpenGLWidgets
+    Qt6::Xml
     ${OpenCV_LIBS}
     qlementine
+    MvrGdtf
 )
 
 target_compile_definitions(onpoint PRIVATE WEBCAM_AVAILABLE=1)
@@ -297,6 +320,8 @@ if(APPLE)
     find_library(COREFOUNDATION CoreFoundation REQUIRED)
     target_link_libraries(onpoint PRIVATE
         ${FOUNDATION} ${AVFOUNDATION} ${COREMEDIA} ${COREFOUNDATION})
+    # MvrGdtf uses CoreFoundation for TXString (UUID, string ops)
+    target_link_libraries(onpoint PRIVATE ${COREFOUNDATION})
 
     # DeckLink SDK (macOS): headers bundled in third_party/decklink/include/
     set(_decklink_macos_inc "${CMAKE_SOURCE_DIR}/third_party/decklink/include")

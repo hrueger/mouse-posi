@@ -13,12 +13,15 @@
 #include <QPair>
 #include <QContextMenuEvent>
 #include "Project.h"
+#include "MvrImporter.h"
+#include <memory>
+#include <unordered_map>
 
 class Calibration;
 
-enum class Stage3DTool { OrbitCamera, Select, DrawRect, DrawPolygon };
-
+enum class Stage3DTool  { OrbitCamera, Select, DrawRect, DrawPolygon };
 enum class CameraPreset { Top, Front, FrontTop, Left, Right };
+enum class MvrRenderMode { Flat, Shaded, Wireframe };
 
 class Stage3DView : public QOpenGLWidget, protected QOpenGLFunctions_3_3_Core {
     Q_OBJECT
@@ -30,6 +33,9 @@ public:
     void setStageObjects(const QList<StageObject>& objs);
     void setTrackerPositions(const QMap<int, QPair<float,float>>& pos,
                              const QList<TrackerConfig>& trackers);
+    void setMvrImports(const QList<MvrImport>& imports);
+    void setShowMvrLabels(bool show);
+    void setMvrRenderMode(MvrRenderMode mode);
     void setActiveTool(Stage3DTool tool);
     void applyCameraPreset(CameraPreset preset);
     void setSelectedObject(int id);
@@ -59,7 +65,10 @@ protected:
 
 private:
     void initShaders();
+    void initLitShader();
     void buildGridGeometry();
+    void drawMvrMeshLit(const MvrMesh& mesh);
+    void drawMvrMeshWireframe(const MvrMesh& mesh);
 
     QMatrix4x4 mvpMatrix() const;
     QVector3D cameraPos() const;
@@ -74,6 +83,8 @@ private:
     void drawCalibRect();
     void drawStageObjects();
     void drawTrackers();
+    void drawMvrLayers();
+    void drawMvrLabels(QPainter& p) const;
     void drawDrawingPreview();
     void drawCameraMarker();
     void drawGizmoOverlay(QPainter& p) const;
@@ -89,10 +100,16 @@ private:
 
     void cleanup();
 
-    // Shader + GL state
+    // Shader + GL state (flat-color, used for grid/trackers/stage objects)
     QOpenGLShaderProgram*    shader_ = nullptr;
     QOpenGLBuffer            vbo_{QOpenGLBuffer::VertexBuffer};
     QOpenGLVertexArrayObject vao_;
+
+    // Lit shader (Phong, used for MVR geometry in Shaded mode)
+    QOpenGLShaderProgram*    litShader_ = nullptr;
+    QOpenGLBuffer            litVbo_{QOpenGLBuffer::VertexBuffer};
+    QOpenGLVertexArrayObject litVao_;
+    int                      litVboCapacity_ = 0; // bytes currently allocated in litVbo_
 
     // Grid geometry (static lines)
     QVector<QVector3D> gridVerts_;
@@ -103,6 +120,7 @@ private:
     QList<StageObject>            stageObjects_;
     QMap<int, QPair<float,float>> trackerPositions_;
     QList<TrackerConfig>          trackers_;
+    QList<MvrImport>              mvrImports_;
     int                           selectedObjectId_ = -1;
 
     // Camera
@@ -127,6 +145,23 @@ private:
 
     // Viewport
     int viewW_ = 1, viewH_ = 1;
+
+    // GPU cache for MVR meshes: per-mesh VBO + VAO created once on import
+    struct GpuMvrMesh {
+        QOpenGLBuffer vbo{QOpenGLBuffer::VertexBuffer};
+        QOpenGLVertexArrayObject vao;
+        int vertexCount = 0; // number of vertices (not bytes)
+        // Wireframe: index buffer of triangle edges (GL_LINES) referencing vbo.
+        // Reuses vbo positions so no extra vertex data is stored.
+        QOpenGLBuffer lineIbo{QOpenGLBuffer::IndexBuffer};
+        QOpenGLVertexArrayObject lineVao;
+        int lineIndexCount = 0; // number of indices in lineIbo
+    };
+    std::unordered_map<const MvrMesh*, std::unique_ptr<GpuMvrMesh>> mvrGpuCache_;
+
+    // View settings
+    bool          showMvrLabels_  = true;
+    MvrRenderMode mvrRenderMode_  = MvrRenderMode::Shaded;
 
     // Visibility overrides for system items
     bool      calibRectVisible_   = true;

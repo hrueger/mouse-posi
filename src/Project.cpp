@@ -3,6 +3,8 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonArray>
+#include <QByteArray>
+#include <QFileInfo>
 #include <stdexcept>
 
 Project Project::defaultProject() {
@@ -47,13 +49,158 @@ static QList<QPointF> jsonToPointList(const QJsonArray& arr) {
     return pts;
 }
 
+// ─── MVR Serialization ────────────────────────────────────────────────────
+
+static QJsonObject mvrMeshToJson(const MvrMeshData& mesh) {
+    QJsonObject json;
+    json["color"] = mesh.color.name();
+    QJsonArray verticesArr;
+    for (const auto& v : mesh.vertices) {
+        QJsonArray vtx{v.x(), v.y(), v.z()};
+        verticesArr.append(vtx);
+    }
+    json["vertices"] = verticesArr;
+    QJsonArray normalsArr;
+    for (const auto& n : mesh.normals) {
+        QJsonArray nml{n.x(), n.y(), n.z()};
+        normalsArr.append(nml);
+    }
+    json["normals"] = normalsArr;
+    return json;
+}
+
+static MvrMeshData jsonToMvrMesh(const QJsonObject& json) {
+    MvrMeshData mesh;
+    mesh.color = QColor(json["color"].toString("#b4b4b4"));
+    if (!mesh.color.isValid()) mesh.color = QColor(180, 180, 180);
+    for (const auto& v : json["vertices"].toArray()) {
+        QJsonArray vtx = v.toArray();
+        if (vtx.size() >= 3)
+            mesh.vertices.append(QVector3D(vtx[0].toDouble(), vtx[1].toDouble(), vtx[2].toDouble()));
+    }
+    for (const auto& n : json["normals"].toArray()) {
+        QJsonArray nml = n.toArray();
+        if (nml.size() >= 3)
+            mesh.normals.append(QVector3D(nml[0].toDouble(), nml[1].toDouble(), nml[2].toDouble()));
+    }
+    return mesh;
+}
+
+static QJsonObject mvrObjectToJson(const MvrObjectData& obj) {
+    QJsonObject json;
+    json["name"] = obj.name;
+    json["type"] = int(obj.type);
+    json["position"] = QJsonArray{obj.positionM.x(), obj.positionM.y(), obj.positionM.z()};
+    json["gdtfSpec"] = obj.gdtfSpec;
+    json["unitNumber"] = obj.unitNumber;
+    json["dmxAddress"] = obj.dmxAddress;
+    json["enabled"] = obj.enabled;
+    QJsonArray meshesArr;
+    for (const auto& mesh : obj.meshes) {
+        meshesArr.append(mvrMeshToJson(mesh));
+    }
+    json["meshes"] = meshesArr;
+    return json;
+}
+
+static MvrObjectData jsonToMvrObject(const QJsonObject& json) {
+    MvrObjectData obj;
+    obj.name = json["name"].toString();
+    obj.type = MvrObjectData::Type(json["type"].toInt(int(MvrObjectData::Type::Unknown)));
+    QJsonArray pos = json["position"].toArray();
+    if (pos.size() >= 3)
+        obj.positionM = QVector3D(pos[0].toDouble(), pos[1].toDouble(), pos[2].toDouble());
+    obj.gdtfSpec = json["gdtfSpec"].toString();
+    obj.unitNumber = json["unitNumber"].toInt();
+    obj.dmxAddress = json["dmxAddress"].toInt();
+    obj.enabled = json["enabled"].toBool(true);
+    for (const auto& m : json["meshes"].toArray()) {
+        obj.meshes.append(jsonToMvrMesh(m.toObject()));
+    }
+    return obj;
+}
+
+static QJsonObject mvrLayerToJson(const MvrLayerData& layer) {
+    QJsonObject json;
+    json["name"] = layer.name;
+    json["enabled"] = layer.enabled;
+    QJsonArray objsArr;
+    for (const auto& obj : layer.objects) {
+        objsArr.append(mvrObjectToJson(obj));
+    }
+    json["objects"] = objsArr;
+    return json;
+}
+
+static MvrLayerData jsonToMvrLayer(const QJsonObject& json) {
+    MvrLayerData layer;
+    layer.name = json["name"].toString();
+    layer.enabled = json["enabled"].toBool(true);
+    for (const auto& v : json["objects"].toArray()) {
+        layer.objects.append(jsonToMvrObject(v.toObject()));
+    }
+    return layer;
+}
+
+static QJsonObject mvrImportToJson(const MvrImportData& import) {
+    QJsonObject json;
+    json["name"] = import.name;
+    json["offsetX"] = double(import.offsetX);
+    json["offsetY"] = double(import.offsetY);
+    json["offsetZ"] = double(import.offsetZ);
+    json["rotDeg"] = double(import.rotDeg);
+    json["enabled"] = import.enabled;
+    QJsonArray layersArr;
+    for (const auto& layer : import.layers) {
+        layersArr.append(mvrLayerToJson(layer));
+    }
+    json["layers"] = layersArr;
+    return json;
+}
+
+static MvrImportData jsonToMvrImport(const QJsonObject& json) {
+    MvrImportData import;
+    import.name = json["name"].toString();
+    import.offsetX = float(json["offsetX"].toDouble(0.0));
+    import.offsetY = float(json["offsetY"].toDouble(0.0));
+    import.offsetZ = float(json["offsetZ"].toDouble(0.0));
+    import.rotDeg = float(json["rotDeg"].toDouble(0.0));
+    import.enabled = json["enabled"].toBool(true);
+    for (const auto& v : json["layers"].toArray()) {
+        import.layers.append(jsonToMvrLayer(v.toObject()));
+    }
+    return import;
+}
+
+static QString mvrRenderModeToString(MvrRenderModeEnum mode) {
+    switch (mode) {
+    case MvrRenderModeEnum::Flat:      return QStringLiteral("flat");
+    case MvrRenderModeEnum::Shaded:    return QStringLiteral("shaded");
+    case MvrRenderModeEnum::Wireframe: return QStringLiteral("wireframe");
+    }
+    return QStringLiteral("shaded");
+}
+
+static MvrRenderModeEnum stringToMvrRenderMode(const QString& str) {
+    if (str == QStringLiteral("flat"))      return MvrRenderModeEnum::Flat;
+    if (str == QStringLiteral("wireframe")) return MvrRenderModeEnum::Wireframe;
+    return MvrRenderModeEnum::Shaded;
+}
+
 Project Project::load(const QString& path) {
     QFile f(path);
     if (!f.open(QIODevice::ReadOnly))
         throw std::runtime_error("Cannot open file: " + path.toStdString());
 
+    QByteArray data = f.readAll();
+    // Try decompressing first (new format); if that fails, treat as raw JSON (legacy format)
+    QByteArray decompressed = qUncompress(data);
+    if (decompressed.isEmpty() && !data.isEmpty()) {
+        decompressed = data;  // Fall back to uncompressed data if decompression fails
+    }
+
     QJsonParseError parseErr;
-    QJsonDocument doc = QJsonDocument::fromJson(f.readAll(), &parseErr);
+    QJsonDocument doc = QJsonDocument::fromJson(decompressed, &parseErr);
     if (doc.isNull() || !doc.isObject())
         throw std::runtime_error("Invalid showfile (JSON parse error): "
                                  + parseErr.errorString().toStdString());
@@ -160,6 +307,13 @@ Project Project::load(const QString& path) {
         p.stageObjects << obj;
     }
 
+    QJsonObject mvr = root["mvr"].toObject();
+    p.mvr.showLabels = mvr["showLabels"].toBool(false);
+    p.mvr.renderMode = stringToMvrRenderMode(mvr["renderMode"].toString("shaded"));
+    for (const auto& v : mvr["imports"].toArray()) {
+        p.mvr.imports.append(jsonToMvrImport(v.toObject()));
+    }
+
     return p;
 }
 
@@ -264,7 +418,19 @@ void Project::save(const QString& path) const {
     cam3d["dist"]    = double(stage3dCamera.dist);
     root["stage3dCamera"] = cam3d;
 
+    QJsonObject mvrJson;
+    mvrJson["showLabels"] = mvr.showLabels;
+    mvrJson["renderMode"] = mvrRenderModeToString(mvr.renderMode);
+    QJsonArray importsArr;
+    for (const auto& import : mvr.imports) {
+        importsArr.append(mvrImportToJson(import));
+    }
+    mvrJson["imports"] = importsArr;
+    root["mvr"] = mvrJson;
+
     QFile f(path);
-    if (f.open(QIODevice::WriteOnly))
-        f.write(QJsonDocument(root).toJson());
+    if (f.open(QIODevice::WriteOnly)) {
+        QByteArray json = QJsonDocument(root).toJson(QJsonDocument::Compact);
+        f.write(qCompress(json, 9));  // zlib compression level 9
+    }
 }

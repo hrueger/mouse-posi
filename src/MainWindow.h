@@ -16,6 +16,7 @@
 #include <QtGlobal>
 #include "Project.h"
 #include "Calibration.h"
+#include "MvrImporter.h"
 
 class VideoWidget;
 class NdiReceiver;
@@ -155,6 +156,7 @@ private:
     bool applyingProject_ = false;
 
     QList<StageObject> systemStageItems_;
+    QList<MvrImport>   mvrImports_;
     QVector3D          cameraPos3D_;
     bool               camera3DValid_ = false;
     qint64  sacnLastReceivedMs_ = -1;  // ms since epoch, -1 = never

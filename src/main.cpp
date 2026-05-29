@@ -1,5 +1,6 @@
 #include <QApplication>
 #include <QSurfaceFormat>
+#include <QMessageLogContext>
 #ifdef Q_OS_WIN
 #  include <objbase.h>
 #endif
@@ -16,7 +17,18 @@
 Q_IMPORT_PLUGIN(QDarwinCameraPermissionPlugin)
 #endif
 
+static void messageHandler(QtMsgType type, const QMessageLogContext& ctx, const QString& msg)
+{
+    // Qt6 on macOS logs this from its Metal RHI backend during window compositor
+    // transitions (dock show/hide, screen changes). It is harmless noise.
+    if (msg.contains(QLatin1String("Metal texture cache was released")))
+        return;
+    QMessageLogger(ctx.file, ctx.line, ctx.function).debug().noquote() << msg;
+}
+
 int main(int argc, char* argv[]) {
+    qInstallMessageHandler(messageHandler);
+
     // Must be set before QApplication to ensure all internal GL contexts
     // (including shared ones) use the same version — required on macOS.
     QSurfaceFormat fmt;

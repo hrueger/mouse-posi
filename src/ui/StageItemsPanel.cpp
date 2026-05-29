@@ -1,33 +1,39 @@
 #include "StageItemsPanel.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
-#include <QTableWidget>
-#include <QTableWidgetItem>
+#include <QTreeWidget>
+#include <QTreeWidgetItem>
 #include <QHeaderView>
 #include <QToolButton>
 #include <QMenu>
+#include <QLineEdit>
+
+static constexpr int COL_NAME = 0;
+static constexpr int COL_VID  = 1;
+static constexpr int COL_3D   = 2;
 
 StageItemsPanel::StageItemsPanel(QWidget* parent) : QWidget(parent)
 {
-    objectTable_ = new QTableWidget;
-    objectTable_->setColumnCount(3);
-    objectTable_->setHorizontalHeaderLabels({"Name", "Vid", "3D"});
-    objectTable_->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
-    objectTable_->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Fixed);
-    objectTable_->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Fixed);
-    objectTable_->setColumnWidth(1, 36);
-    objectTable_->setColumnWidth(2, 36);
-    objectTable_->setSelectionBehavior(QAbstractItemView::SelectRows);
-    objectTable_->setSelectionMode(QAbstractItemView::SingleSelection);
-    objectTable_->verticalHeader()->setVisible(false);
-    objectTable_->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    objectTable_->setShowGrid(false);
-    objectTable_->setAlternatingRowColors(true);
+    tree_ = new QTreeWidget;
+    tree_->setColumnCount(3);
+    tree_->setHeaderLabels({QStringLiteral("Name"), QStringLiteral("Vid"), QStringLiteral("3D")});
+    tree_->header()->setSectionResizeMode(COL_NAME, QHeaderView::Stretch);
+    tree_->header()->setSectionResizeMode(COL_VID,  QHeaderView::Fixed);
+    tree_->header()->setSectionResizeMode(COL_3D,   QHeaderView::Fixed);
+    tree_->setColumnWidth(COL_VID, 36);
+    tree_->setColumnWidth(COL_3D,  36);
+    tree_->setSelectionBehavior(QAbstractItemView::SelectRows);
+    tree_->setSelectionMode(QAbstractItemView::SingleSelection);
+    tree_->setUniformRowHeights(true);
+    tree_->setEditTriggers(QAbstractItemView::DoubleClicked | QAbstractItemView::EditKeyPressed);
+    tree_->setRootIsDecorated(true);
+    tree_->setExpandsOnDoubleClick(false);  // we handle rename on double-click manually
+    tree_->setIndentation(16);
 
-    addRectBtn_    = new QToolButton; addRectBtn_->setText("+ Rect");
-    addPolyBtn_    = new QToolButton; addPolyBtn_->setText("+ Polygon");
-    addOutlineBtn_ = new QToolButton; addOutlineBtn_->setText("+ Outline");
-    deleteBtn_     = new QToolButton; deleteBtn_->setText("Delete");
+    addRectBtn_    = new QToolButton; addRectBtn_->setText(QStringLiteral("+ Rect"));
+    addPolyBtn_    = new QToolButton; addPolyBtn_->setText(QStringLiteral("+ Polygon"));
+    addOutlineBtn_ = new QToolButton; addOutlineBtn_->setText(QStringLiteral("+ Outline"));
+    deleteBtn_     = new QToolButton; deleteBtn_->setText(QStringLiteral("Delete"));
     deleteBtn_->setEnabled(false);
 
     auto* listBtns = new QHBoxLayout;
@@ -41,7 +47,7 @@ StageItemsPanel::StageItemsPanel(QWidget* parent) : QWidget(parent)
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(4, 4, 4, 4);
     layout->setSpacing(4);
-    layout->addWidget(objectTable_, 1);
+    layout->addWidget(tree_, 1);
     layout->addLayout(listBtns);
 
     connect(addRectBtn_,    &QToolButton::clicked, this, &StageItemsPanel::addRectRequested);
@@ -51,31 +57,55 @@ StageItemsPanel::StageItemsPanel(QWidget* parent) : QWidget(parent)
         if (selectedId_ >= 0) emit deleteRequested(selectedId_);
     });
 
-    connect(objectTable_, &QTableWidget::currentCellChanged,
-            this, [this](int row, int, int, int) { onTableRowChanged(row); });
-    connect(objectTable_, &QTableWidget::itemChanged,
-            this, &StageItemsPanel::onTableItemChanged);
+    connect(tree_, &QTreeWidget::itemSelectionChanged,
+            this, &StageItemsPanel::onItemSelectionChanged);
+    connect(tree_, &QTreeWidget::itemChanged,
+            this, &StageItemsPanel::onItemChanged);
+    connect(tree_, &QTreeWidget::itemDoubleClicked,
+            this, &StageItemsPanel::onItemDoubleClicked);
 
-    objectTable_->setContextMenuPolicy(Qt::CustomContextMenu);
-    connect(objectTable_, &QTableWidget::customContextMenuRequested,
+    tree_->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(tree_, &QTreeWidget::customContextMenuRequested,
             this, [this](const QPoint& pos) {
-        auto* item = objectTable_->itemAt(pos);
+        auto* item = tree_->itemAt(pos);
         if (!item) return;
-        int id = item->data(Qt::UserRole).toInt();
-        if (id < 0) return;  // system objects not in context menu
+        const QString kind = item->data(COL_NAME, RoleKind).toString();
 
-        QMenu menu(this);
-        menu.addAction("Duplicate", [this, id]{ emit duplicateRequested(id); });
-        menu.addSeparator();
-        menu.addAction("Delete", [this, id]{ emit deleteRequested(id); });
-        menu.exec(objectTable_->viewport()->mapToGlobal(pos));
+        if (kind == QLatin1String("stage")) {
+            const int id = item->data(COL_NAME, RoleId).toInt();
+            if (id < 0) return;
+            QMenu menu(this);
+            menu.addAction(QStringLiteral("Rename"), [this, item]{
+                tree_->editItem(item, COL_NAME);
+            });
+            menu.addAction(QStringLiteral("Duplicate"), [this, id]{ emit duplicateRequested(id); });
+            menu.addSeparator();
+            menu.addAction(QStringLiteral("Delete"), [this, id]{ emit deleteRequested(id); });
+            menu.exec(tree_->viewport()->mapToGlobal(pos));
+
+        } else if (kind == QLatin1String("mvr-root")) {
+            const int ii = item->data(COL_NAME, RoleMvrImport).toInt();
+            QMenu menu(this);
+            menu.addAction(QStringLiteral("Rename"), [this, item]{
+                tree_->editItem(item, COL_NAME);
+            });
+            menu.addSeparator();
+            menu.addAction(QStringLiteral("Delete"), [this, ii]{ emit mvrImportDeleteRequested(ii); });
+            menu.exec(tree_->viewport()->mapToGlobal(pos));
+        }
     });
 }
 
 void StageItemsPanel::setAllObjects(const QList<StageObject>& all)
 {
     objects_ = all;
-    rebuildTable();
+    rebuildTree();
+}
+
+void StageItemsPanel::setMvrImports(const QList<MvrImport>& imports)
+{
+    mvrImports_ = imports;
+    rebuildTree();
 }
 
 void StageItemsPanel::setSelectedObject(int id)
@@ -83,92 +113,236 @@ void StageItemsPanel::setSelectedObject(int id)
     selectedId_ = id;
     updateButtonStates();
 
-    updatingTable_ = true;
-    bool found = false;
-    for (int row = 0; row < objectTable_->rowCount(); ++row) {
-        auto* item = objectTable_->item(row, 0);
-        if (item && item->data(Qt::UserRole).toInt() == id) {
-            objectTable_->selectRow(row);
-            found = true;
+    updatingTree_ = true;
+    QTreeWidgetItemIterator it(tree_);
+    while (*it) {
+        if ((*it)->data(COL_NAME, RoleKind) == QLatin1String("stage") &&
+            (*it)->data(COL_NAME, RoleId).toInt() == id) {
+            tree_->setCurrentItem(*it);
             break;
         }
+        ++it;
     }
-    if (!found) objectTable_->clearSelection();
-    updatingTable_ = false;
+    if (!tree_->currentItem()) tree_->clearSelection();
+    updatingTree_ = false;
 }
 
-void StageItemsPanel::onTableRowChanged(int row)
+void StageItemsPanel::onItemSelectionChanged()
 {
-    if (updatingTable_) return;
-    auto* item = objectTable_->item(row, 0);
-    int id = item ? item->data(Qt::UserRole).toInt() : -999;
-    selectedId_ = id;
-    updateButtonStates();
-    if (id != -999) emit selectionChanged(id);
+    if (updatingTree_) return;
+    QTreeWidgetItem* cur = tree_->currentItem();
+    if (!cur) { selectedId_ = -999; updateButtonStates(); return; }
+
+    const QString kind = cur->data(COL_NAME, RoleKind).toString();
+    if (kind == QLatin1String("stage")) {
+        selectedId_ = cur->data(COL_NAME, RoleId).toInt();
+        updateButtonStates();
+        if (selectedId_ != -999) emit selectionChanged(selectedId_);
+    } else if (kind == QLatin1String("mvr-root")) {
+        selectedId_ = -999;
+        updateButtonStates();
+        emit mvrImportSelected(cur->data(COL_NAME, RoleMvrImport).toInt());
+    } else {
+        selectedId_ = -999;
+        updateButtonStates();
+        emit mvrChildItemSelected();
+    }
 }
 
-void StageItemsPanel::onTableItemChanged(QTableWidgetItem* item)
+void StageItemsPanel::onItemDoubleClicked(QTreeWidgetItem* item, int col)
 {
-    if (updatingTable_) return;
-    const int col = item->column();
-    if (col != 1 && col != 2) return;
+    if (col != COL_NAME) return;
+    const QString kind = item->data(COL_NAME, RoleKind).toString();
+    if (kind == QLatin1String("mvr-root") ||
+        (kind == QLatin1String("stage") && item->data(COL_NAME, RoleId).toInt() >= 0))
+        tree_->editItem(item, COL_NAME);
+}
 
-    int id = item->data(Qt::UserRole).toInt();
-    bool checked = (item->checkState() == Qt::Checked);
+void StageItemsPanel::onItemChanged(QTreeWidgetItem* item, int col)
+{
+    if (updatingTree_) return;
+    const QString kind = item->data(COL_NAME, RoleKind).toString();
 
-    for (auto& obj : objects_) {
-        if (obj.id != id) continue;
-        if (col == 1) obj.visibleInVideo = checked;
-        else          obj.visibleIn3D    = checked;
-        emit visibilityChanged(id, obj.visibleInVideo, obj.visibleIn3D);
+    // MVR root renamed
+    if (kind == QLatin1String("mvr-root") && col == COL_NAME) {
+        const int ii = item->data(COL_NAME, RoleMvrImport).toInt();
+        if (ii < 0 || ii >= mvrImports_.size()) return;
+        const QString newName = item->text(COL_NAME).trimmed();
+        if (!newName.isEmpty() && newName != mvrImports_[ii].name) {
+            mvrImports_[ii].name = newName;
+            emit mvrImportRenamed(ii, newName);
+        }
         return;
     }
-}
 
-void StageItemsPanel::rebuildTable()
-{
-    int prevId = selectedId_;
-    updatingTable_ = true;
-    objectTable_->setRowCount(0);
-
-    for (const auto& obj : objects_) {
-        const int row = objectTable_->rowCount();
-        objectTable_->insertRow(row);
-        objectTable_->setRowHeight(row, 22);
-
-        bool isSystem = (obj.id < 0);
-
-        auto* nameItem = new QTableWidgetItem(obj.name);
-        nameItem->setData(Qt::UserRole, obj.id);
-        nameItem->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
-        if (isSystem)
-            nameItem->setForeground(QColor(160, 160, 160));
-        objectTable_->setItem(row, 0, nameItem);
-
-        auto* vidItem = new QTableWidgetItem;
-        vidItem->setData(Qt::UserRole, obj.id);
-        bool videoEditable = (obj.id != -1);
-        if (videoEditable) {
-            vidItem->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemIsUserCheckable);
-            vidItem->setCheckState(obj.visibleInVideo ? Qt::Checked : Qt::Unchecked);
-        } else {
-            vidItem->setFlags(Qt::ItemIsSelectable);
-            vidItem->setCheckState(Qt::Unchecked);
-            vidItem->setForeground(QColor(80, 80, 80));
+    // MVR root visibility toggled
+    if (kind == QLatin1String("mvr-root") && col == COL_3D) {
+        const int ii = item->data(COL_NAME, RoleMvrImport).toInt();
+        if (ii < 0 || ii >= mvrImports_.size()) return;
+        const bool checked = (item->checkState(COL_3D) == Qt::Checked);
+        mvrImports_[ii].enabled = checked;
+        // Cascade to all layers and objects
+        updatingTree_ = true;
+        for (int li = 0; li < mvrImports_[ii].layers.size(); ++li) {
+            auto* layerItem = item->child(li);
+            if (!layerItem) continue;
+            layerItem->setCheckState(COL_3D, checked ? Qt::Checked : Qt::Unchecked);
+            mvrImports_[ii].layers[li].enabled = checked;
+            for (int oi = 0; oi < mvrImports_[ii].layers[li].objects.size(); ++oi) {
+                auto* objItem = layerItem->child(oi);
+                if (!objItem) continue;
+                objItem->setCheckState(COL_3D, checked ? Qt::Checked : Qt::Unchecked);
+                mvrImports_[ii].layers[li].objects[oi].enabled = checked;
+            }
         }
-        objectTable_->setItem(row, 1, vidItem);
-
-        auto* tdItem = new QTableWidgetItem;
-        tdItem->setData(Qt::UserRole, obj.id);
-        tdItem->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemIsUserCheckable);
-        tdItem->setCheckState(obj.visibleIn3D ? Qt::Checked : Qt::Unchecked);
-        objectTable_->setItem(row, 2, tdItem);
-
-        if (obj.id == prevId)
-            objectTable_->selectRow(row);
+        updatingTree_ = false;
+        emit mvrVisibilityChanged(ii, -1, -1, checked);
+        return;
     }
 
-    updatingTable_ = false;
+    if (kind == QLatin1String("stage")) {
+        const int id = item->data(COL_NAME, RoleId).toInt();
+        if (col == COL_NAME && id >= 0) {
+            const QString newName = item->text(COL_NAME).trimmed();
+            if (!newName.isEmpty()) {
+                for (auto& obj : objects_)
+                    if (obj.id == id) { obj.name = newName; break; }
+                emit objectRenamed(id, newName);
+            }
+            return;
+        }
+        if (col != COL_VID && col != COL_3D) return;
+        const bool checked = (item->checkState(col) == Qt::Checked);
+        for (auto& obj : objects_) {
+            if (obj.id != id) continue;
+            if (col == COL_VID) obj.visibleInVideo = checked;
+            else                obj.visibleIn3D    = checked;
+            emit visibilityChanged(id, obj.visibleInVideo, obj.visibleIn3D);
+            return;
+        }
+
+    } else if (kind == QLatin1String("mvr-layer")) {
+        if (col != COL_3D) return;
+        const int ii = item->data(COL_NAME, RoleMvrImport).toInt();
+        const int li = item->data(COL_NAME, RoleMvrLayer).toInt();
+        if (ii < 0 || ii >= mvrImports_.size()) return;
+        if (li < 0 || li >= mvrImports_[ii].layers.size()) return;
+        const bool checked = (item->checkState(COL_3D) == Qt::Checked);
+        mvrImports_[ii].layers[li].enabled = checked;
+        updatingTree_ = true;
+        for (int c = 0; c < item->childCount(); ++c) {
+            item->child(c)->setCheckState(COL_3D, checked ? Qt::Checked : Qt::Unchecked);
+            mvrImports_[ii].layers[li].objects[c].enabled = checked;
+        }
+        updatingTree_ = false;
+        emit mvrVisibilityChanged(ii, li, -1, checked);
+
+    } else if (kind == QLatin1String("mvr-obj")) {
+        if (col != COL_3D) return;
+        const int ii = item->data(COL_NAME, RoleMvrImport).toInt();
+        const int li = item->data(COL_NAME, RoleMvrLayer).toInt();
+        const int oi = item->data(COL_NAME, RoleMvrObj).toInt();
+        if (ii < 0 || ii >= mvrImports_.size()) return;
+        if (li < 0 || li >= mvrImports_[ii].layers.size()) return;
+        if (oi < 0 || oi >= mvrImports_[ii].layers[li].objects.size()) return;
+        const bool checked = (item->checkState(COL_3D) == Qt::Checked);
+        mvrImports_[ii].layers[li].objects[oi].enabled = checked;
+        QTreeWidgetItem* parent = item->parent();
+        if (parent) {
+            int cnt = 0;
+            for (int c = 0; c < parent->childCount(); ++c)
+                if (parent->child(c)->checkState(COL_3D) == Qt::Checked) ++cnt;
+            updatingTree_ = true;
+            if (cnt == 0)
+                parent->setCheckState(COL_3D, Qt::Unchecked);
+            else if (cnt == parent->childCount())
+                parent->setCheckState(COL_3D, Qt::Checked);
+            else
+                parent->setCheckState(COL_3D, Qt::PartiallyChecked);
+            updatingTree_ = false;
+        }
+        emit mvrVisibilityChanged(ii, li, oi, checked);
+    }
+}
+
+void StageItemsPanel::rebuildTree()
+{
+    updatingTree_ = true;
+    const int prevId = selectedId_;
+    tree_->clear();
+
+    // ── Manual stage objects ───────────────────────────────────────────────
+    for (const auto& obj : objects_) {
+        auto* item = new QTreeWidgetItem(tree_);
+        const bool isSystem = (obj.id < 0);
+
+        item->setText(COL_NAME, obj.name);
+        item->setData(COL_NAME, RoleKind, QStringLiteral("stage"));
+        item->setData(COL_NAME, RoleId,   obj.id);
+        item->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable |
+                       (isSystem ? Qt::ItemFlag{} : Qt::ItemIsEditable));
+        if (isSystem) item->setForeground(COL_NAME, QColor(160, 160, 160));
+
+        if (obj.id != -1) {
+            item->setData(COL_VID, RoleKind, QStringLiteral("stage"));
+            item->setData(COL_VID, RoleId,   obj.id);
+            item->setCheckState(COL_VID, obj.visibleInVideo ? Qt::Checked : Qt::Unchecked);
+            item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
+        }
+
+        item->setData(COL_3D, RoleKind, QStringLiteral("stage"));
+        item->setData(COL_3D, RoleId,   obj.id);
+        item->setCheckState(COL_3D, obj.visibleIn3D ? Qt::Checked : Qt::Unchecked);
+        item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
+
+        if (obj.id == prevId) tree_->setCurrentItem(item);
+    }
+
+    // ── MVR imports (one root per imported file) ───────────────────────────
+    for (int ii = 0; ii < mvrImports_.size(); ++ii) {
+        const MvrImport& import = mvrImports_[ii];
+
+        auto* mvrRoot = new QTreeWidgetItem(tree_);
+        mvrRoot->setText(COL_NAME, import.name.isEmpty()
+                                    ? QStringLiteral("MVR Import") : import.name);
+        mvrRoot->setData(COL_NAME, RoleKind,      QStringLiteral("mvr-root"));
+        mvrRoot->setData(COL_NAME, RoleMvrImport, ii);
+        // Editable so user can rename it inline (F2 or double-click)
+        mvrRoot->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemIsEditable | Qt::ItemIsUserCheckable);
+        mvrRoot->setExpanded(false);
+        mvrRoot->setForeground(COL_NAME, QColor(100, 180, 255));
+        mvrRoot->setCheckState(COL_3D, import.enabled ? Qt::Checked : Qt::Unchecked);
+
+        for (int li = 0; li < import.layers.size(); ++li) {
+            const MvrLayer& layer = import.layers[li];
+
+            auto* layerItem = new QTreeWidgetItem(mvrRoot);
+            layerItem->setText(COL_NAME, layer.name.isEmpty()
+                                          ? QStringLiteral("(layer)") : layer.name);
+            layerItem->setData(COL_NAME, RoleKind,      QStringLiteral("mvr-layer"));
+            layerItem->setData(COL_NAME, RoleMvrImport, ii);
+            layerItem->setData(COL_NAME, RoleMvrLayer,  li);
+            layerItem->setData(COL_NAME, RoleMvrObj,    -1);
+            layerItem->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemIsUserCheckable);
+            layerItem->setCheckState(COL_3D, layer.enabled ? Qt::Checked : Qt::Unchecked);
+            layerItem->setExpanded(false);
+
+            for (int oi = 0; oi < layer.objects.size(); ++oi) {
+                const MvrObject& obj = layer.objects[oi];
+                auto* objItem = new QTreeWidgetItem(layerItem);
+                objItem->setText(COL_NAME, obj.name.isEmpty()
+                                             ? QStringLiteral("(obj)") : obj.name);
+                objItem->setData(COL_NAME, RoleKind,      QStringLiteral("mvr-obj"));
+                objItem->setData(COL_NAME, RoleMvrImport, ii);
+                objItem->setData(COL_NAME, RoleMvrLayer,  li);
+                objItem->setData(COL_NAME, RoleMvrObj,    oi);
+                objItem->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemIsUserCheckable);
+                objItem->setCheckState(COL_3D, obj.enabled ? Qt::Checked : Qt::Unchecked);
+            }
+        }
+    }
+
+    updatingTree_ = false;
     updateButtonStates();
 }
 

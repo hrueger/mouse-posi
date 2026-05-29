@@ -6,6 +6,7 @@
 #include <QVector3D>
 #include "Project.h"
 #include "Stage3DView.h"
+#include "MvrImporter.h"
 
 class Calibration;
 class QToolButton;
@@ -22,6 +23,9 @@ public:
                              const QList<TrackerConfig>& trackers);
     void setSelectedObject(int id);
     void setActiveTool(Stage3DTool tool);
+    void setMvrImports(const QList<MvrImport>& imports);
+    void setShowMvrLabels(bool show);
+    void setMvrRenderMode(MvrRenderMode mode);
 
     Stage3DCameraState getCameraState() const;
     void               setCameraState(const Stage3DCameraState& s);
@@ -33,6 +37,10 @@ signals:
     void polygonDrawn(QPolygonF polygon);
     void rectDrawn(QPointF center, float width, float depth);
     void objectSelected(int id);
+    void mvrImportChanged(MvrImport import);
+    void mvrImportCleared();
+    void showMvrLabelsChanged(bool show);
+    void mvrRenderModeChanged(MvrRenderMode mode);
 
 private:
     Stage3DView* view_;
