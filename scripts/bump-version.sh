@@ -2,6 +2,7 @@
 set -euo pipefail
 
 CMAKELISTS="CMakeLists.txt"
+CHANGELOG="CHANGELOG.md"
 
 usage() {
   echo "Usage: $0 <version>"
@@ -38,6 +39,60 @@ tag="v${new_version}"
 
 echo "Bumping ${current} → ${new_version}"
 
+entry_file=$(mktemp)
+cleanup() {
+  rm -f "$entry_file"
+}
+trap cleanup EXIT
+
+cat > "$entry_file" <<EOF
+## ${tag} - $(date +%Y-%m-%d)
+
+EOF
+
+if ! command -v nano >/dev/null 2>&1; then
+  echo "nano is required to enter the changelog entry." >&2
+  exit 1
+fi
+
+echo "Opening nano for the ${tag} changelog entry..."
+nano "$entry_file"
+
+if ! awk '
+  /^## / { next }
+  /^[[:space:]]*$/ { next }
+  /^[[:space:]]*-[[:space:]]*$/ { next }
+  { found = 1 }
+  END { exit(found ? 0 : 1) }
+' "$entry_file"; then
+  echo "Changelog entry is empty; aborting version bump." >&2
+  exit 1
+fi
+
+changelog_out=$(mktemp)
+if [[ -f "$CHANGELOG" ]]; then
+  awk -v entry_file="$entry_file" '
+    NR == 1 {
+      print
+      print ""
+      while ((getline line < entry_file) > 0) print line
+      close(entry_file)
+      print ""
+      next
+    }
+    NR == 2 && $0 == "" { next }
+    { print }
+  ' "$CHANGELOG" > "$changelog_out"
+else
+  {
+    echo "# Changelog"
+    echo
+    cat "$entry_file"
+    echo
+  } > "$changelog_out"
+fi
+mv "$changelog_out" "$CHANGELOG"
+
 # Update CMakeLists.txt (works on macOS and Linux)
 sed -i.bak "s/project(onpoint VERSION [0-9][0-9.]*/project(onpoint VERSION ${new_version}/" "$CMAKELISTS"
 rm -f "${CMAKELISTS}.bak"
@@ -47,7 +102,7 @@ updated=$(sed -n 's/project(onpoint VERSION \([0-9][0-9.]*\) .*/\1/p' "$CMAKELIS
 [[ "$updated" != "$new_version" ]] && { echo "Version update failed (got '${updated}')"; exit 1; }
 
 # Commit and tag
-git add "$CMAKELISTS"
+git add "$CMAKELISTS" "$CHANGELOG"
 git commit -m "chore: bump version to ${tag}"
 git tag "$tag"
 
