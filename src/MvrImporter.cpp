@@ -4,6 +4,7 @@
 #include <QMatrix4x4>
 #include <archive.h>
 #include <archive_entry.h>
+#include <unordered_map>
 
 #include "Include/VectorworksMVR.h"
 #include "cgltf.h"
@@ -321,6 +322,120 @@ static void appendGeometryFromSceneObject(ISceneObj* sceneObj,
     }
 }
 
+// ─── GDTF geometry traversal ─────────────────────────────────────────────────
+
+// Per-geometry rotation derived from MVR CustomCommands.
+struct GeomRot { QVector3D axis; float angle; };
+using GeomRotMap = std::unordered_map<std::string, GeomRot>;
+
+// Parse CustomCommands on the scene object into a geomName → rotation map.
+// The command channel-function string encodes the geometry and attribute:
+//   "{GeomName}_{AttrName}.{AttrName}.{FnName}"
+// Physical values are in degrees for angle attributes.
+// We only handle Pan (→ local Z axis) and Tilt (→ local X axis) here;
+// other attributes (blades, zoom, etc.) are not relevant for body pose rendering.
+static GeomRotMap buildCustomCommandMap(ISceneObj* sceneObj)
+{
+    GeomRotMap result;
+    size_t cmdCount = 0;
+    if (sceneObj->GetCustomCommandCount(cmdCount) != kVCOMError_NoError || cmdCount == 0)
+        return result;
+
+    for (size_t i = 0; i < cmdCount; ++i) {
+        ICustomCommandPtr cmd;
+        if (sceneObj->GetCustomCommandAt(i, &cmd) != kVCOMError_NoError || !cmd) continue;
+
+        bool isPct = false;
+        if (cmd->IsPercentage(isPct) != kVCOMError_NoError || isPct) continue;
+
+        double value = 0.0;
+        if (cmd->GetValue(value) != kVCOMError_NoError) continue;
+
+        // Parse "{GeomName}_{AttrName}.{AttrName}...." → geomName, attrName
+        const QString chanFn = toQString(cmd->GetChannelFunction());
+        const int dot = chanFn.indexOf('.');
+        if (dot < 0) continue;
+        const QString geomAttr = chanFn.left(dot);
+        const QString attrName = chanFn.mid(dot + 1, chanFn.indexOf('.', dot + 1) - dot - 1);
+        const QString sep = '_' + attrName;
+        if (!geomAttr.endsWith(sep)) continue;
+        const QString geomName = geomAttr.left(geomAttr.length() - sep.length());
+
+        QVector3D axis;
+        if (attrName == QStringLiteral("Pan"))
+            axis = QVector3D(0.0f, 0.0f, 1.0f); // pan: vertical axis (local Z)
+        else if (attrName == QStringLiteral("Tilt"))
+            axis = QVector3D(1.0f, 0.0f, 0.0f); // tilt: horizontal axis (local X)
+        else
+            continue;
+
+        result[geomName.toStdString()] = { axis, float(value) };
+    }
+    return result;
+}
+
+static void appendGeometryFromGdtfNode(IGdtfGeometry* geom,
+                                       const QMatrix4x4& parentXform,
+                                       const GeomRotMap& rotMap,
+                                       MvrObject& outObject)
+{
+    if (!geom) return;
+
+    STransformMatrix geomMat{};
+    QMatrix4x4 localXform = parentXform;
+    if (geom->GetTransformMatrix(geomMat) == kVCOMError_NoError)
+        localXform = parentXform * mvrToViewMatrix(geomMat);
+
+    // Apply MVR custom-command rotation for this geometry (in local space).
+    const std::string name = toQString(geom->GetName()).toStdString();
+    auto it = rotMap.find(name);
+    if (it != rotMap.end() && it->second.angle != 0.0f) {
+        QMatrix4x4 rot;
+        rot.rotate(it->second.angle, it->second.axis);
+        localXform = localXform * rot;
+    }
+
+    IGdtfModelPtr model;
+    if (geom->GetModel(&model) == kVCOMError_NoError && model) {
+        void* buf = nullptr;
+        size_t len = 0;
+        if (model->GetBufferGLTF(&buf, len) == kVCOMError_NoError && buf && len > 0) {
+            QByteArray glbData(static_cast<const char*>(buf), int(len));
+            for (MvrMesh& mesh : loadGlb(glbData, localXform))
+                outObject.meshes.append(std::move(mesh));
+        }
+    }
+
+    size_t childCount = 0;
+    if (geom->GetInternalGeometryCount(childCount) == kVCOMError_NoError) {
+        for (size_t i = 0; i < childCount; ++i) {
+            IGdtfGeometryPtr child;
+            if (geom->GetInternalGeometryAt(i, &child) == kVCOMError_NoError && child)
+                appendGeometryFromGdtfNode(child, localXform, rotMap, outObject);
+        }
+    }
+}
+
+static void appendGeometryFromGdtfFixture(ISceneObj* sceneObj,
+                                          const QMatrix4x4& fixtureXform,
+                                          MvrObject& outObject)
+{
+    IGdtfFixturePtr gdtfFixture;
+    if (sceneObj->GetGdtfFixture(&gdtfFixture) != kVCOMError_NoError || !gdtfFixture)
+        return;
+
+    const GeomRotMap rotMap = buildCustomCommandMap(sceneObj);
+
+    size_t geomCount = 0;
+    if (gdtfFixture->GetGeometryCount(geomCount) != kVCOMError_NoError) return;
+
+    for (size_t i = 0; i < geomCount; ++i) {
+        IGdtfGeometryPtr geom;
+        if (gdtfFixture->GetGeometryAt(i, &geom) == kVCOMError_NoError && geom)
+            appendGeometryFromGdtfNode(geom, fixtureXform, rotMap, outObject);
+    }
+}
+
 static MvrObject readSceneObject(ISceneObj* sceneObj,
                                  const QString& zipPath)
 {
@@ -340,6 +455,8 @@ static MvrObject readSceneObject(ISceneObj* sceneObj,
         const QMatrix4x4 xform = mvrToViewMatrix(matrix);
         outObject.positionM = positionFromMatrix(matrix);
         appendGeometryFromSceneObject(sceneObj, xform, zipPath, outObject);
+        if (outObject.type == MvrObject::Type::Fixture && outObject.meshes.isEmpty())
+            appendGeometryFromGdtfFixture(sceneObj, xform, outObject);
     }
 
     if (outObject.type == MvrObject::Type::Fixture) {
