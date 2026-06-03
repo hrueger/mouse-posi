@@ -1,5 +1,6 @@
 #pragma once
 #include <QString>
+#include <QByteArray>
 #include <QVector3D>
 #include <QList>
 #include <QVector>
@@ -53,6 +54,7 @@ struct MvrImport {
     float           offsetZ = 0.f; // metres, view Z (depth)
     float           rotDeg  = 0.f; // degrees, CCW around view Y axis
     bool            enabled = true; // visibility in 3D
+    QByteArray      mvrData;        // raw MVR file bytes (for showfile embedding)
 };
 
 // ─── Importer ─────────────────────────────────────────────────────────────────
@@ -72,4 +74,5 @@ public:
         QString         error;
     };
     static ParseResult parse(const QString& filePath);
+    static ParseResult parseFromData(const QByteArray& data); // write to temp file, then parse
 };

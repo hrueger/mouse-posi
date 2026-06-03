@@ -1,10 +1,13 @@
 #include "Project.h"
 #include <QFile>
+#include <functional>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QByteArray>
 #include <QFileInfo>
+#include <archive.h>
+#include <archive_entry.h>
 #include <stdexcept>
 
 Project Project::defaultProject() {
@@ -49,42 +52,7 @@ static QList<QPointF> jsonToPointList(const QJsonArray& arr) {
     return pts;
 }
 
-// ─── MVR Serialization ────────────────────────────────────────────────────
-
-static QJsonObject mvrMeshToJson(const MvrMeshData& mesh) {
-    QJsonObject json;
-    json["color"] = mesh.color.name();
-    QJsonArray verticesArr;
-    for (const auto& v : mesh.vertices) {
-        QJsonArray vtx{v.x(), v.y(), v.z()};
-        verticesArr.append(vtx);
-    }
-    json["vertices"] = verticesArr;
-    QJsonArray normalsArr;
-    for (const auto& n : mesh.normals) {
-        QJsonArray nml{n.x(), n.y(), n.z()};
-        normalsArr.append(nml);
-    }
-    json["normals"] = normalsArr;
-    return json;
-}
-
-static MvrMeshData jsonToMvrMesh(const QJsonObject& json) {
-    MvrMeshData mesh;
-    mesh.color = QColor(json["color"].toString("#b4b4b4"));
-    if (!mesh.color.isValid()) mesh.color = QColor(180, 180, 180);
-    for (const auto& v : json["vertices"].toArray()) {
-        QJsonArray vtx = v.toArray();
-        if (vtx.size() >= 3)
-            mesh.vertices.append(QVector3D(vtx[0].toDouble(), vtx[1].toDouble(), vtx[2].toDouble()));
-    }
-    for (const auto& n : json["normals"].toArray()) {
-        QJsonArray nml = n.toArray();
-        if (nml.size() >= 3)
-            mesh.normals.append(QVector3D(nml[0].toDouble(), nml[1].toDouble(), nml[2].toDouble()));
-    }
-    return mesh;
-}
+// ─── MVR Serialization (metadata only, no mesh geometry) ─────────────────────
 
 static QJsonObject mvrObjectToJson(const MvrObjectData& obj) {
     QJsonObject json;
@@ -95,11 +63,6 @@ static QJsonObject mvrObjectToJson(const MvrObjectData& obj) {
     json["unitNumber"] = obj.unitNumber;
     json["dmxAddress"] = obj.dmxAddress;
     json["enabled"] = obj.enabled;
-    QJsonArray meshesArr;
-    for (const auto& mesh : obj.meshes) {
-        meshesArr.append(mvrMeshToJson(mesh));
-    }
-    json["meshes"] = meshesArr;
     return json;
 }
 
@@ -114,9 +77,6 @@ static MvrObjectData jsonToMvrObject(const QJsonObject& json) {
     obj.unitNumber = json["unitNumber"].toInt();
     obj.dmxAddress = json["dmxAddress"].toInt();
     obj.enabled = json["enabled"].toBool(true);
-    for (const auto& m : json["meshes"].toArray()) {
-        obj.meshes.append(jsonToMvrMesh(m.toObject()));
-    }
     return obj;
 }
 
@@ -125,9 +85,8 @@ static QJsonObject mvrLayerToJson(const MvrLayerData& layer) {
     json["name"] = layer.name;
     json["enabled"] = layer.enabled;
     QJsonArray objsArr;
-    for (const auto& obj : layer.objects) {
+    for (const auto& obj : layer.objects)
         objsArr.append(mvrObjectToJson(obj));
-    }
     json["objects"] = objsArr;
     return json;
 }
@@ -136,13 +95,12 @@ static MvrLayerData jsonToMvrLayer(const QJsonObject& json) {
     MvrLayerData layer;
     layer.name = json["name"].toString();
     layer.enabled = json["enabled"].toBool(true);
-    for (const auto& v : json["objects"].toArray()) {
+    for (const auto& v : json["objects"].toArray())
         layer.objects.append(jsonToMvrObject(v.toObject()));
-    }
     return layer;
 }
 
-static QJsonObject mvrImportToJson(const MvrImportData& import) {
+static QJsonObject mvrImportToJson(const MvrImportData& import, int index) {
     QJsonObject json;
     json["name"] = import.name;
     json["offsetX"] = double(import.offsetX);
@@ -150,10 +108,10 @@ static QJsonObject mvrImportToJson(const MvrImportData& import) {
     json["offsetZ"] = double(import.offsetZ);
     json["rotDeg"] = double(import.rotDeg);
     json["enabled"] = import.enabled;
+    json["mvrFile"] = QString("mvr/%1.mvr").arg(index);
     QJsonArray layersArr;
-    for (const auto& layer : import.layers) {
+    for (const auto& layer : import.layers)
         layersArr.append(mvrLayerToJson(layer));
-    }
     json["layers"] = layersArr;
     return json;
 }
@@ -166,9 +124,8 @@ static MvrImportData jsonToMvrImport(const QJsonObject& json) {
     import.offsetZ = float(json["offsetZ"].toDouble(0.0));
     import.rotDeg = float(json["rotDeg"].toDouble(0.0));
     import.enabled = json["enabled"].toBool(true);
-    for (const auto& v : json["layers"].toArray()) {
+    for (const auto& v : json["layers"].toArray())
         import.layers.append(jsonToMvrLayer(v.toObject()));
-    }
     return import;
 }
 
@@ -187,27 +144,66 @@ static MvrRenderModeEnum stringToMvrRenderMode(const QString& str) {
     return MvrRenderModeEnum::Shaded;
 }
 
-Project Project::load(const QString& path) {
-    QFile f(path);
-    if (!f.open(QIODevice::ReadOnly))
-        throw std::runtime_error("Cannot open file: " + path.toStdString());
+// ─── ZIP helpers (libarchive) ─────────────────────────────────────────────────
 
-    QByteArray data = f.readAll();
-    // Try decompressing first (new format); if that fails, treat as raw JSON (legacy format)
-    QByteArray decompressed = qUncompress(data);
-    if (decompressed.isEmpty() && !data.isEmpty()) {
-        decompressed = data;  // Fall back to uncompressed data if decompression fails
+static void zipWriteEntry(struct archive* a, const QString& name, const QByteArray& data)
+{
+    struct archive_entry* entry = archive_entry_new();
+    const QByteArray utf8Name = name.toUtf8();
+    archive_entry_set_pathname(entry, utf8Name.constData());
+    archive_entry_set_size(entry, data.size());
+    archive_entry_set_filetype(entry, AE_IFREG);
+    archive_entry_set_perm(entry, 0644);
+    archive_write_header(a, entry);
+    archive_write_data(a, data.constData(), size_t(data.size()));
+    archive_entry_free(entry);
+}
+
+// Returns map: entry path → bytes, for all entries in a ZIP file.
+static QMap<QString, QByteArray> zipReadAll(const QString& path)
+{
+    QMap<QString, QByteArray> result;
+    struct archive* a = archive_read_new();
+    archive_read_support_format_zip(a);
+    archive_read_support_filter_all(a);
+    const QByteArray utf8 = path.toUtf8();
+    if (archive_read_open_filename(a, utf8.constData(), 65536) != ARCHIVE_OK) {
+        archive_read_free(a);
+        return result;
     }
+    struct archive_entry* entry;
+    while (archive_read_next_header(a, &entry) == ARCHIVE_OK) {
+        const QString name = QString::fromUtf8(archive_entry_pathname(entry));
+        const la_int64_t size = archive_entry_size(entry);
+        if (size > 0) {
+            QByteArray data(int(size), '\0');
+            archive_read_data(a, data.data(), size_t(size));
+            result[name] = data;
+        } else {
+            archive_read_data_skip(a);
+        }
+    }
+    archive_read_free(a);
+    return result;
+}
+
+// ─── Load ─────────────────────────────────────────────────────────────────────
+
+Project Project::load(const QString& path)
+{
+    const auto entries = zipReadAll(path);
+    if (!entries.contains(QStringLiteral("project.json")))
+        throw std::runtime_error("Invalid showfile: missing project.json");
 
     QJsonParseError parseErr;
-    QJsonDocument doc = QJsonDocument::fromJson(decompressed, &parseErr);
+    QJsonDocument doc = QJsonDocument::fromJson(entries["project.json"], &parseErr);
     if (doc.isNull() || !doc.isObject())
         throw std::runtime_error("Invalid showfile (JSON parse error): "
                                  + parseErr.errorString().toStdString());
 
     QJsonObject root = doc.object();
-
     Project p;
+
     p.videoSourceType       = root["videoSourceType"].toString();
     p.ndiSource             = root["ndiSource"].toString();
     p.decklinkDevice        = root["decklinkDevice"].toString();
@@ -238,23 +234,21 @@ Project Project::load(const QString& path) {
     for (const auto& v : cal["projectionMatrix"].toArray())
         p.calibration.projectionMatrix << v.toDouble();
 
-    // Sanitize calibration: discard if point lists are mismatched or homography is wrong size
     if (p.calibration.imagePoints.size() != p.calibration.stagePoints.size()
-        || (p.calibration.homography.size() != 9 && !p.calibration.homography.isEmpty())) {
+        || (p.calibration.homography.size() != 9 && !p.calibration.homography.isEmpty()))
         p.calibration = {};
-    }
 
     QJsonObject net = root["network"].toObject();
     QString modeStr = net["mode"].toString("multicast");
     if (modeStr == "unicast")        p.network.psnMode = PsnMode::Unicast;
     else if (modeStr == "broadcast") p.network.psnMode = PsnMode::Broadcast;
     else                             p.network.psnMode = PsnMode::Multicast;
-    p.network.multicastIp     = net["multicastIp"].toString("236.10.10.10");
-    p.network.unicastIp       = net["unicastIp"].toString();
-    p.network.broadcastIp     = net["broadcastIp"].toString("255.255.255.255");
-    p.network.port            = static_cast<quint16>(net["port"].toInt(56565));
-    p.network.psnInterface    = net["psnInterface"].toString();
-    p.network.sessionInterface= net["sessionInterface"].toString();
+    p.network.multicastIp      = net["multicastIp"].toString("236.10.10.10");
+    p.network.unicastIp        = net["unicastIp"].toString();
+    p.network.broadcastIp      = net["broadcastIp"].toString("255.255.255.255");
+    p.network.port             = static_cast<quint16>(net["port"].toInt(56565));
+    p.network.psnInterface     = net["psnInterface"].toString();
+    p.network.sessionInterface = net["sessionInterface"].toString();
     QJsonObject sacn = net["sacnInput"].toObject();
     p.network.sacnInput.enabled   = sacn["enabled"].toBool(false);
     p.network.sacnInput.mode      = sacn["mode"].toString() == "unicast"
@@ -307,17 +301,26 @@ Project Project::load(const QString& path) {
         p.stageObjects << obj;
     }
 
-    QJsonObject mvr = root["mvr"].toObject();
-    p.mvr.showLabels = mvr["showLabels"].toBool(false);
-    p.mvr.renderMode = stringToMvrRenderMode(mvr["renderMode"].toString("shaded"));
-    for (const auto& v : mvr["imports"].toArray()) {
-        p.mvr.imports.append(jsonToMvrImport(v.toObject()));
+    QJsonObject mvrJson = root["mvr"].toObject();
+    p.mvr.showLabels = mvrJson["showLabels"].toBool(false);
+    p.mvr.renderMode = stringToMvrRenderMode(mvrJson["renderMode"].toString("shaded"));
+    int idx = 0;
+    for (const auto& v : mvrJson["imports"].toArray()) {
+        MvrImportData importData = jsonToMvrImport(v.toObject());
+        const QString mvrKey = QString("mvr/%1.mvr").arg(idx++);
+        if (entries.contains(mvrKey))
+            importData.mvrData = entries[mvrKey];
+        p.mvr.imports.append(importData);
     }
 
     return p;
 }
 
-void Project::save(const QString& path) const {
+// ─── Save ─────────────────────────────────────────────────────────────────────
+
+void Project::save(const QString& path, std::function<void(int)> progressCb) const
+{
+    // ── Build project.json ────────────────────────────────────────────────────
     QJsonObject root;
     root["videoSourceType"]      = videoSourceType;
     root["ndiSource"]            = ndiSource;
@@ -422,15 +425,31 @@ void Project::save(const QString& path) const {
     mvrJson["showLabels"] = mvr.showLabels;
     mvrJson["renderMode"] = mvrRenderModeToString(mvr.renderMode);
     QJsonArray importsArr;
-    for (const auto& import : mvr.imports) {
-        importsArr.append(mvrImportToJson(import));
-    }
+    for (int i = 0; i < mvr.imports.size(); ++i)
+        importsArr.append(mvrImportToJson(mvr.imports[i], i));
     mvrJson["imports"] = importsArr;
     root["mvr"] = mvrJson;
 
-    QFile f(path);
-    if (f.open(QIODevice::WriteOnly)) {
-        QByteArray json = QJsonDocument(root).toJson(QJsonDocument::Compact);
-        f.write(qCompress(json, 9));  // zlib compression level 9
+    const QByteArray jsonBytes = QJsonDocument(root).toJson(QJsonDocument::Compact);
+
+    // ── Write ZIP archive ─────────────────────────────────────────────────────
+    struct archive* a = archive_write_new();
+    archive_write_set_format_zip(a);
+    const QByteArray utf8Path = path.toUtf8();
+    if (archive_write_open_filename(a, utf8Path.constData()) != ARCHIVE_OK) {
+        archive_write_free(a);
+        throw std::runtime_error("Cannot write showfile: " + path.toStdString());
     }
+
+    if (progressCb) progressCb(-1);  // about to write project.json
+    zipWriteEntry(a, QStringLiteral("project.json"), jsonBytes);
+
+    for (int i = 0; i < mvr.imports.size(); ++i) {
+        if (progressCb) progressCb(i);  // about to write MVR i
+        if (!mvr.imports[i].mvrData.isEmpty())
+            zipWriteEntry(a, QString("mvr/%1.mvr").arg(i), mvr.imports[i].mvrData);
+    }
+
+    archive_write_close(a);
+    archive_write_free(a);
 }

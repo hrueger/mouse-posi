@@ -2,6 +2,7 @@
 
 #include <QFile>
 #include <QMatrix4x4>
+#include <QTemporaryFile>
 #include <archive.h>
 #include <archive_entry.h>
 #include <unordered_map>
@@ -555,6 +556,20 @@ MvrImporter::ParseResult MvrImporter::parse(const QString& filePath)
     }
 
     return result;
+}
+
+MvrImporter::ParseResult MvrImporter::parseFromData(const QByteArray& data)
+{
+    QTemporaryFile tmp;
+    tmp.setAutoRemove(true);
+    if (!tmp.open()) {
+        ParseResult r;
+        r.error = QStringLiteral("Cannot create temporary file for MVR parsing");
+        return r;
+    }
+    tmp.write(data);
+    tmp.flush();
+    return parse(tmp.fileName());
 }
 
 MvrImporter::Result MvrImporter::import(const QString& filePath)

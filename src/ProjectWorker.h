@@ -3,6 +3,7 @@
 #include <QString>
 #include <QThread>
 #include "Project.h"
+#include "MvrImporter.h"
 
 class ProjectWorker : public QObject {
     Q_OBJECT
@@ -15,9 +16,9 @@ public:
 signals:
     void saveFinished();
     void saveFailed(const QString& error);
-    void loadFinished(const Project& project);
+    void loadFinished(const Project& project, const QList<MvrImport>& parsedImports);
     void loadFailed(const QString& error);
-    void progress(int percent);  // 0-100 for save progress
+    void progress(int percent);  // 0-100
 
 private slots:
     void doSave();

@@ -1,5 +1,7 @@
 #pragma once
 #include <QString>
+#include <QByteArray>
+#include <functional>
 #include <QColor>
 #include <QList>
 #include <QMap>
@@ -89,39 +91,33 @@ struct Stage3DCameraState {
 
 enum class MvrRenderModeEnum { Flat, Shaded, Wireframe };
 
-struct MvrMeshData {
-    QVector<QVector3D> vertices;   // flat list: every 3 = one triangle
-    QVector<QVector3D> normals;    // per-vertex normals (may be empty)
-    QColor             color = QColor(180, 180, 180);
-};
-
 struct MvrObjectData {
     enum class Type { Fixture, SceneObject, Truss, Group, Unknown };
 
-    QString  name;
-    Type     type      = Type::Unknown;
+    QString   name;
+    Type      type       = Type::Unknown;
     QVector3D positionM;
-    QString  gdtfSpec;
-    int      unitNumber = 0;
-    int      dmxAddress = 0;
-    bool     enabled    = true;
-    QVector<MvrMeshData> meshes;
+    QString   gdtfSpec;
+    int       unitNumber = 0;
+    int       dmxAddress = 0;
+    bool      enabled    = true;
 };
 
 struct MvrLayerData {
-    QString           name;
+    QString              name;
     QList<MvrObjectData> objects;
-    bool              enabled = true;
+    bool                 enabled = true;
 };
 
 struct MvrImportData {
-    QString           name;
-    QList<MvrLayerData> layers;
-    float             offsetX = 0.f;
-    float             offsetY = 0.f;
-    float             offsetZ = 0.f;
-    float             rotDeg  = 0.f;
-    bool              enabled = true;
+    QString              name;
+    QList<MvrLayerData>  layers;
+    float                offsetX = 0.f;
+    float                offsetY = 0.f;
+    float                offsetZ = 0.f;
+    float                rotDeg  = 0.f;
+    bool                 enabled = true;
+    QByteArray           mvrData; // raw MVR file bytes embedded in the showfile
 };
 
 struct MvrSettings {
@@ -149,6 +145,8 @@ struct Project {
     MvrSettings               mvr;
 
     static Project   load(const QString& path);
-    void             save(const QString& path) const;
+    // progress callback: called with entry index (0 = JSON, 1..n = MVR files) after each entry written
+    void             save(const QString& path,
+                          std::function<void(int)> progress = {}) const;
     static Project   defaultProject();
 };

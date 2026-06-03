@@ -1,5 +1,6 @@
 #define NOMINMAX
 #include "MainWindow.h"
+#include "MvrImporter.h"
 #include "VideoWidget.h"
 #include "NdiReceiver.h"
 #include "WebcamCapture.h"
@@ -21,6 +22,7 @@
 #include "ui/WelcomeScreen.h"
 #include <oclero/qlementine/style/ThemeManager.hpp>
 #include <QApplication>
+#include <QPropertyAnimation>
 #include <QStyleHints>
 #include <QDockWidget>
 #include <QMenuBar>
@@ -313,34 +315,28 @@ MainWindow::MainWindow(NdiReceiver* ndi,
         mvrImports_.append(import);
         stage3DPanel_->setMvrImports(mvrImports_);
         stageItemsPanel_->setMvrImports(mvrImports_);
-        // Convert MvrImport to MvrImportData for storage (including meshes)
+        // Convert MvrImport to MvrImportData for storage (metadata + raw MVR bytes)
         MvrImportData data;
-        data.name = import.name;
+        data.name    = import.name;
         data.offsetX = import.offsetX;
         data.offsetY = import.offsetY;
         data.offsetZ = import.offsetZ;
-        data.rotDeg = import.rotDeg;
+        data.rotDeg  = import.rotDeg;
         data.enabled = import.enabled;
+        data.mvrData = import.mvrData;
         for (const auto& layer : import.layers) {
             MvrLayerData layerData;
-            layerData.name = layer.name;
+            layerData.name    = layer.name;
             layerData.enabled = layer.enabled;
             for (const auto& obj : layer.objects) {
                 MvrObjectData objData;
-                objData.name = obj.name;
-                objData.type = MvrObjectData::Type(int(obj.type));
-                objData.positionM = obj.positionM;
-                objData.gdtfSpec = obj.gdtfSpec;
+                objData.name       = obj.name;
+                objData.type       = MvrObjectData::Type(int(obj.type));
+                objData.positionM  = obj.positionM;
+                objData.gdtfSpec   = obj.gdtfSpec;
                 objData.unitNumber = obj.unitNumber;
                 objData.dmxAddress = obj.dmxAddress;
-                objData.enabled = obj.enabled;
-                for (const auto& mesh : obj.meshes) {
-                    MvrMeshData meshData;
-                    meshData.vertices = mesh.vertices;
-                    meshData.normals = mesh.normals;
-                    meshData.color = mesh.color;
-                    objData.meshes.append(meshData);
-                }
+                objData.enabled    = obj.enabled;
                 layerData.objects.append(objData);
             }
             data.layers.append(layerData);
@@ -840,8 +836,14 @@ MainWindow::MainWindow(NdiReceiver* ndi,
     auto* recentMenu = fileMenu->addMenu("Recent Projects");
     connect(recentMenu, &QMenu::aboutToShow, this, [this, recentMenu]() {
         recentMenu->clear();
-        for (const auto& path : recentProjects()) {
-            auto* a = recentMenu->addAction(path);
+        const auto recent = recentProjects();
+        if (recent.isEmpty()) {
+            recentMenu->addAction(QStringLiteral("(none)"))->setEnabled(false);
+            return;
+        }
+        for (const auto& path : recent) {
+            auto* a = recentMenu->addAction(QFileInfo(path).fileName());
+            a->setToolTip(path);
             connect(a, &QAction::triggered, this, [this, path]() {
                 openRecentProject(path);
             });
@@ -930,9 +932,9 @@ MainWindow::MainWindow(NdiReceiver* ndi,
     });
     connect(welcomeScreen_, &WelcomeScreen::openRequested, this, [this](const QString& path) {
         if (path.isEmpty()) {
-            showWorkspace();
-            onOpenProject();
+            onOpenProject(); // showWorkspace() is called inside, after the dialog confirms a file
         } else {
+            showWorkspace();
             openRecentProject(path);
         }
     });
@@ -1131,9 +1133,11 @@ void MainWindow::updateTrackersPanelPeers() {
     trackersPanel_->setSessionContext(isAdmin, peerNames, assignments);
 }
 
-void MainWindow::loadProject(const Project& p) {
+void MainWindow::loadProject(const Project& p, const QList<MvrImport>& parsedImports) {
     project_ = p;
+    pendingParsedImports_ = parsedImports;
     applyProject();
+    pendingParsedImports_.clear();
 }
 
 void MainWindow::setNdiSource(const QString& source) {
@@ -1300,41 +1304,56 @@ void MainWindow::applyProject() {
             sacnReceiver_->startListening(sacnCfg);
     });
 
-    // Restore MVR imports (including meshes)
+    // Restore MVR imports by parsing the embedded MVR data on the main thread.
+    // (libmvrgdtf requires the main thread; progress bar updated between imports.)
     mvrImports_.clear();
-    for (const auto& importData : project_.mvr.imports) {
-        MvrImport import;
-        import.name = importData.name;
-        import.offsetX = importData.offsetX;
-        import.offsetY = importData.offsetY;
-        import.offsetZ = importData.offsetZ;
-        import.rotDeg = importData.rotDeg;
-        import.enabled = importData.enabled;
-        for (const auto& layerData : importData.layers) {
-            MvrLayer layer;
-            layer.name = layerData.name;
-            layer.enabled = layerData.enabled;
-            for (const auto& objData : layerData.objects) {
-                MvrObject obj;
-                obj.name = objData.name;
-                obj.type = MvrObject::Type(int(objData.type));
-                obj.positionM = objData.positionM;
-                obj.gdtfSpec = objData.gdtfSpec;
-                obj.unitNumber = objData.unitNumber;
-                obj.dmxAddress = objData.dmxAddress;
-                obj.enabled = objData.enabled;
-                for (const auto& meshData : objData.meshes) {
-                    MvrMesh mesh;
-                    mesh.vertices = meshData.vertices;
-                    mesh.normals = meshData.normals;
-                    mesh.color = meshData.color;
-                    obj.meshes.append(mesh);
-                }
-                layer.objects.append(obj);
+    {
+        const int n = project_.mvr.imports.size();
+        for (int i = 0; i < n; ++i) {
+            // Animate progress bar: 15% (after ZIP load) → 95% spread across imports.
+            if (saveLoadProgressBar_ && saveLoadProgressBar_->isVisible()) {
+                setProgressAnimated(15 + 80 * i / std::max(n, 1));
+                // Let the animation run visibly before the next blocking parse.
+                QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents, 350);
             }
-            import.layers.append(layer);
+
+            const auto& importData = project_.mvr.imports[i];
+            if (importData.mvrData.isEmpty()) continue;
+            auto pr = MvrImporter::parseFromData(importData.mvrData);
+            if (!pr.error.isEmpty()) continue;
+
+            MvrImport import;
+            import.name    = importData.name;
+            import.offsetX = importData.offsetX;
+            import.offsetY = importData.offsetY;
+            import.offsetZ = importData.offsetZ;
+            import.rotDeg  = importData.rotDeg;
+            import.enabled = importData.enabled;
+            import.mvrData = importData.mvrData;
+            for (const auto& layerData : importData.layers) {
+                for (auto& parsedLayer : pr.layers) {
+                    if (parsedLayer.name != layerData.name) continue;
+                    parsedLayer.enabled = layerData.enabled;
+                    for (auto& parsedObj : parsedLayer.objects) {
+                        for (const auto& objData : layerData.objects) {
+                            if (parsedObj.name == objData.name) {
+                                parsedObj.enabled = objData.enabled;
+                                break;
+                            }
+                        }
+                    }
+                    import.layers.append(parsedLayer);
+                    break;
+                }
+            }
+            mvrImports_.append(import);
         }
-        mvrImports_.append(import);
+        // Animate to 100% then hide.
+        if (saveLoadProgressBar_ && saveLoadProgressBar_->isVisible()) {
+            setProgressAnimated(100);
+            QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents, 450);
+            saveLoadProgressBar_->setVisible(false);
+        }
     }
     stage3DPanel_->setMvrImports(mvrImports_);
     stageItemsPanel_->setMvrImports(mvrImports_);
@@ -1579,7 +1598,6 @@ void MainWindow::onNewProject() {
 void MainWindow::onOpenProject() {
     if (isSavingOrLoading_) return;
 
-    showWorkspace();
     QFileDialog::Options opts;
 #ifdef Q_OS_MAC
     opts |= QFileDialog::DontUseNativeDialog;
@@ -1587,6 +1605,8 @@ void MainWindow::onOpenProject() {
     QString path = QFileDialog::getOpenFileName(
         this, "Open Project", QDir::homePath(), "OnPoint Projects (*.onpoint)", nullptr, opts);
     if (path.isEmpty()) return;
+
+    showWorkspace();
 
     isSavingOrLoading_ = true;
     setCursor(Qt::WaitCursor);
@@ -1621,6 +1641,9 @@ void MainWindow::onSaveProjectAs() {
         "OnPoint Projects (*.onpoint)", nullptr, opts);
     if (path.isEmpty()) return;
 
+    if (!path.endsWith(QStringLiteral(".onpoint"), Qt::CaseInsensitive))
+        path += QStringLiteral(".onpoint");
+
     isSavingOrLoading_ = true;
     setCursor(Qt::WaitCursor);
     actSaveProject_->setEnabled(false);
@@ -1649,15 +1672,15 @@ void MainWindow::onSaveFailed(const QString& error) {
         QString("Could not save project:\n\n%1").arg(error));
 }
 
-void MainWindow::onLoadFinished(const Project& project) {
+void MainWindow::onLoadFinished(const Project& project, const QList<MvrImport>& parsedImports) {
     isSavingOrLoading_ = false;
     setCursor(Qt::ArrowCursor);
-    if (saveLoadProgressBar_) saveLoadProgressBar_->setVisible(false);
+    // Do NOT hide progress bar yet — applyProject() will parse MVRs and hide it when done.
 
     // Set applyingProject temporarily to prevent UI updates from marking as dirty during load
     bool wasApplying = applyingProject_;
     applyingProject_ = true;
-    loadProject(project);
+    loadProject(project, parsedImports);
 
     saveRecent(projectPath_);
     updateWindowTitle();
@@ -1678,14 +1701,31 @@ void MainWindow::onLoadFailed(const QString& error) {
             .arg(QFileInfo(projectPath_).fileName(), error));
 }
 
-void MainWindow::onWorkerProgress(int percent) {
+void MainWindow::setProgressAnimated(int target) {
     if (!saveLoadProgressBar_) return;
-    saveLoadProgressBar_->setValue(percent);
-    if (percent <= 0) {
-        saveLoadProgressBar_->setVisible(false);
-    } else if (!saveLoadProgressBar_->isVisible()) {
+    if (!saveLoadProgressBar_->isVisible()) {
+        saveLoadProgressBar_->setValue(0);
         saveLoadProgressBar_->setVisible(true);
     }
+    if (progressAnim_) progressAnim_->stop();
+    progressAnim_ = new QPropertyAnimation(saveLoadProgressBar_, "value", this);
+    connect(progressAnim_, &QPropertyAnimation::destroyed,
+            this, [this] { progressAnim_ = nullptr; });
+    progressAnim_->setDuration(400);
+    progressAnim_->setStartValue(saveLoadProgressBar_->value());
+    progressAnim_->setEndValue(target);
+    progressAnim_->setEasingCurve(QEasingCurve::OutCubic);
+    progressAnim_->start(QAbstractAnimation::DeleteWhenStopped);
+}
+
+void MainWindow::onWorkerProgress(int percent) {
+    if (!saveLoadProgressBar_) return;
+    if (percent <= 0) {
+        if (progressAnim_) { progressAnim_->stop(); progressAnim_ = nullptr; }
+        saveLoadProgressBar_->setVisible(false);
+        return;
+    }
+    setProgressAnimated(percent);
 }
 
 void MainWindow::saveRecent(const QString& path) {
@@ -1699,7 +1739,13 @@ void MainWindow::saveRecent(const QString& path) {
 
 QStringList MainWindow::recentProjects() const {
     QSettings s("onpoint", "onpoint");
-    return s.value("recentProjects").toStringList();
+    QStringList all = s.value("recentProjects").toStringList();
+    QStringList existing;
+    for (const auto& p : all)
+        if (QFileInfo::exists(p)) existing << p;
+    if (existing.size() != all.size())
+        s.setValue("recentProjects", existing);
+    return existing;
 }
 
 void MainWindow::updateCameraPosition()

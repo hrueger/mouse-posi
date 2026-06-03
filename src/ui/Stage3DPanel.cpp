@@ -94,6 +94,9 @@ Stage3DPanel::Stage3DPanel(QWidget* parent) : QWidget(parent)
         MvrImport import;
         import.name   = QFileInfo(path).completeBaseName();
         import.layers = dlg.selectedLayers();
+        QFile mvrFile(path);
+        if (mvrFile.open(QIODevice::ReadOnly))
+            import.mvrData = mvrFile.readAll();
         // MainWindow owns the accumulated import: it merges this file's layers
         // with any previously imported MVRs and pushes the combined result back
         // to the view and items panel. Don't set the view directly here, or the

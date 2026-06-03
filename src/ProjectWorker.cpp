@@ -23,8 +23,12 @@ void ProjectWorker::doSave() {
     pendingOp_ = Operation::None;
 
     try {
-        emit progress(50);
-        cachedProject_.save(cachedPath_);
+        const int n = cachedProject_.mvr.imports.size();
+        // Fire progress BEFORE each write so the bar moves immediately.
+        // entry -1 = about to write project.json, entry 0..n-1 = about to write MVR i.
+        cachedProject_.save(cachedPath_, [this, n](int entry) {
+            emit progress(10 + 85 * (entry + 1) / std::max(n + 1, 1));
+        });
         emit progress(100);
         emit saveFinished();
     } catch (const std::exception& e) {
@@ -37,10 +41,12 @@ void ProjectWorker::doLoad() {
     pendingOp_ = Operation::None;
 
     try {
-        emit progress(50);
+        emit progress(5);
         Project p = Project::load(cachedPath_);
-        emit progress(100);
-        emit loadFinished(p);
+        // MVR parsing (libmvrgdtf) must run on the main thread, so we stop here.
+        // applyProject() will parse each embedded MVR and update the progress bar itself.
+        emit progress(15);
+        emit loadFinished(p, {});
     } catch (const std::exception& e) {
         emit loadFailed(QString::fromStdString(e.what()));
     }

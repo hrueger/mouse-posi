@@ -20,6 +20,7 @@
 #include "MvrImporter.h"
 #include "ProjectWorker.h"
 
+class QPropertyAnimation;
 class VideoWidget;
 class NdiReceiver;
 class WebcamCapture;
@@ -49,7 +50,7 @@ public:
                        QWidget* parent = nullptr);
     ~MainWindow() override;
 
-    void loadProject(const Project& p);
+    void loadProject(const Project& p, const QList<MvrImport>& parsedImports = {});
     void setNdiSource(const QString& source);
     void setWebcamSource(const QString& device);
     void setDecklinkSource(const QString& deviceId, const QString& connection,
@@ -70,7 +71,7 @@ private slots:
     void onSaveProjectAs();
     void onSaveFinished();
     void onSaveFailed(const QString& error);
-    void onLoadFinished(const Project& project);
+    void onLoadFinished(const Project& project, const QList<MvrImport>& parsedImports);
     void onLoadFailed(const QString& error);
     void onWorkerProgress(int percent);
 
@@ -79,6 +80,7 @@ private:
     bool isTrackerAllowed(int id) const;
     void setCalibrationActive(bool on);
     void applyProject();
+    void setProgressAnimated(int target); // animate progress bar to target value
     void updateWindowTitle();
     void saveRecent(const QString& path);
     QStringList recentProjects() const;
@@ -200,7 +202,9 @@ private:
     VideoSourceKind videoSourceKind_ = VideoSourceKind::Ndi;
     QString         videoSourceName_;
 
-    ProjectWorker* projectWorker_ = nullptr;
-    QThread*       workerThread_ = nullptr;
-    bool           isSavingOrLoading_ = false;
+    ProjectWorker*  projectWorker_ = nullptr;
+    QThread*        workerThread_ = nullptr;
+    bool            isSavingOrLoading_ = false;
+    QList<MvrImport> pendingParsedImports_; // pre-parsed by worker, consumed by applyProject()
+    QPropertyAnimation* progressAnim_ = nullptr;
 };
