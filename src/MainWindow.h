@@ -187,6 +187,8 @@ private:
     // Stats counters
     int     frameCount_   = 0;
     double  currentFps_   = 0.0;
+    int     videoFrameCount_ = 0;
+    double  videoFps_        = 0.0;
 
     quint64 lastPsnTxPackets_  = 0;
     quint64 lastPsnRxPackets_  = 0;

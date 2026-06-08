@@ -2,8 +2,11 @@
 
 #include <QObject>
 #include <QImage>
+#include <QMap>
+#include <QPair>
 #include <QString>
 #include <QStringList>
+#include <atomic>
 #include <cstdint>
 
 #if defined(DECKLINK_AVAILABLE) && DECKLINK_AVAILABLE
@@ -23,48 +26,38 @@ public:
         SVideo,
     };
 
-    // Device info returned by listDeviceInfos().
     struct DeviceInfo {
         QString displayName;
-        QString persistentId;  // "<id>_<model>" hash; fallback = displayName
+        QString persistentId;
     };
 
-    // Display mode entry returned by listDisplayModes().
-    // mode == 0 (bmdModeUnknown) means "Auto" (format-detection).
     struct DisplayModeInfo {
         QString  name;
-        uint32_t mode;  // BMDDisplayMode cast to uint32_t
+        uint32_t mode;
     };
 
     explicit DeckLinkCapture(QObject* parent = nullptr);
     ~DeckLinkCapture() override;
 
-    // Primary device identifier is the persistent-ID hash, not the display name.
     void    setDeviceId(const QString& persistentId);
     QString deviceId() const;
 
     void       setConnection(Connection conn);
     Connection connection() const;
 
-    // Allow10Bit: true = prefer 10-bit YUV capture (default); false = 8-bit YUV.
     void setAllow10Bit(bool allow);
     bool allow10Bit() const;
 
-    // Display mode: 0 = auto (format detection); other = specific BMDDisplayMode value.
     void     setDisplayMode(uint32_t mode);
     uint32_t displayMode() const;
 
     void start();
     void stop();
 
-    // Returns all connected DeckLink devices.
     static QList<DeviceInfo>      listDeviceInfos(QString* error = nullptr);
-    // Returns supported input connections for the device identified by persistentId.
     static QList<Connection>      supportedConnections(const QString& persistentId);
-    // Returns supported input display modes; always includes "Auto" entry if format detection supported.
     static QList<DisplayModeInfo> listDisplayModes(const QString& persistentId);
-
-    static QString connectionName(Connection conn);
+    static QString                connectionName(Connection conn);
 
 signals:
     void frameReady(const QImage& frame);
@@ -75,21 +68,37 @@ private:
     Connection connection_  = Connection::Unspecified;
     bool       allow10Bit_  = true;
     uint32_t   displayMode_ = 0;
+    bool       streaming_   = false;
+
+    // Incremented on every start() so stale Qt-queued lambdas self-discard.
+    std::atomic<uint64_t> generation_{0};
+
+    // Last confirmed working (BMDDisplayMode, BMDPixelFormat) per Connection (cast to int).
+    // VideoInputFormatChanged populates this; start() uses it to skip the NTSC→format-detect
+    // cycle on second+ starts, since the hardware only fires VideoInputFormatChanged once per
+    // power-on for a given signal.
+    QMap<int, QPair<quint32, quint32>> modeCache_;
 
 #if defined(DECKLINK_AVAILABLE) && DECKLINK_AVAILABLE
     class InputCallback;
     class CpuVideoFrame;
 
+    // Device-lifetime objects — acquired once in openDevice(), released in closeDevice().
+    // IDeckLinkConfiguration must be kept alive for the device lifetime per SDK docs;
+    // releasing it immediately after SetInt can cause the hardware change to be discarded.
     IDeckLink*                deckLink_     = nullptr;
-    IDeckLinkInput*           input_        = nullptr;
+    IDeckLinkConfiguration*   config_       = nullptr;
     IDeckLinkVideoConversion* converter_    = nullptr;
+
+    // Stream-lifetime objects — acquired in start(), released in stop().
+    IDeckLinkInput*           input_        = nullptr;
     InputCallback*            callback_     = nullptr;
     CpuVideoFrame*            convertFrame_ = nullptr;
 
     BMDPixelFormat currentPixelFormat_ = bmdFormat10BitYUV;
 
-    void cleanupDeckLink();
-    void restartWithFormat(BMDDisplayMode mode, BMDPixelFormat pixelFormat);
+    void openDevice();
+    void closeDevice();
 
     static QString    persistentIdFromDevice(IDeckLink* dev);
     static IDeckLink* findDeviceById(const QString& persistentId);

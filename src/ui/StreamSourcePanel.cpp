@@ -130,7 +130,11 @@ StreamSourcePanel::StreamSourcePanel(NdiReceiver* ndi, QWidget* parent)
 
     connect(dlConnCombo_, &QComboBox::currentIndexChanged, this, [this](int) {
         if (settingSource_) return;
+        // Guard mode repopulation so clearing/refilling dlModeCombo_ doesn't fire
+        // additional currentIndexChanged signals and cause multiple emitDecklinkSelection calls.
+        settingSource_ = true;
         populateDecklinkModes(currentId());
+        settingSource_ = false;
         emitDecklinkSelection();
     });
     connect(dlModeCombo_, &QComboBox::currentIndexChanged, this, [this](int) {

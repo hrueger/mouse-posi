@@ -57,10 +57,6 @@ static IDeckLinkIterator* createIterator() {
 } // namespace
 
 // ── CpuVideoFrame ─────────────────────────────────────────────────────────────
-// CPU-side frame buffer used as the destination for ConvertFrame().
-// Inherits IDeckLinkMutableVideoFrame (required by ConvertFrame) AND
-// IDeckLinkVideoBuffer (which ConvertFrame QIs for to get the write pointer).
-// After conversion, rawBytes() returns the converted BGRA data directly.
 
 class DeckLinkCapture::CpuVideoFrame
     : public IDeckLinkMutableVideoFrame
@@ -75,7 +71,6 @@ public:
 
     void* rawBytes() { return buffer_.data(); }
 
-    // IUnknown (overrides both inheritance paths)
     HRESULT QueryInterface(REFIID iid, LPVOID* ppv) override {
         if (!ppv) return E_INVALIDARG;
         *ppv = nullptr;
@@ -111,7 +106,6 @@ public:
         return n;
     }
 
-    // IDeckLinkVideoFrame (no GetBytes here — bytes are in IDeckLinkVideoBuffer)
     long           GetWidth()       override { return width_; }
     long           GetHeight()      override { return height_; }
     long           GetRowBytes()    override { return rowBytes_; }
@@ -120,7 +114,6 @@ public:
     HRESULT GetTimecode(BMDTimecodeFormat, IDeckLinkTimecode**) override { return S_FALSE; }
     HRESULT GetAncillaryData(IDeckLinkVideoFrameAncillary**) override    { return S_FALSE; }
 
-    // IDeckLinkMutableVideoFrame
     HRESULT SetFlags(BMDFrameFlags) override                                      { return S_OK; }
     HRESULT SetTimecode(BMDTimecodeFormat, IDeckLinkTimecode*) override           { return S_FALSE; }
     HRESULT SetTimecodeFromComponents(BMDTimecodeFormat, uint8_t, uint8_t,
@@ -129,7 +122,6 @@ public:
     HRESULT SetTimecodeUserBits(BMDTimecodeFormat, BMDTimecodeUserBits) override  { return S_FALSE; }
     HRESULT SetInterfaceProvider(REFIID, IUnknown*) override                      { return S_OK; }
 
-    // IDeckLinkVideoBuffer — ConvertFrame QIs for this to get the write pointer
     HRESULT GetBytes(void** buf) override {
         if (!buf) return E_INVALIDARG;
         *buf = buffer_.data();
@@ -184,7 +176,10 @@ public:
         return n;
     }
 
-    // IDeckLinkInputCallback
+    // Called on the SDK capture thread when the input format changes.
+    // Following OBS's approach: reconfigure directly here without dispatching
+    // to the main thread — PauseStreams/EnableVideoInput/FlushStreams/StartStreams
+    // are safe and intended to be called from this callback.
     HRESULT VideoInputFormatChanged(BMDVideoInputFormatChangedEvents events,
                                     IDeckLinkDisplayMode* newMode,
                                     BMDDetectedVideoInputFormatFlags detectedFlags) override
@@ -196,9 +191,8 @@ public:
             QMutexLocker lock(&mutex_);
             owner = owner_;
         }
-        if (!owner) return S_OK;
+        if (!owner || !owner->input_) return S_OK;
 
-        // Determine what pixel format the new signal requires.
         BMDPixelFormat newPixelFormat = owner->currentPixelFormat_;
         bool formatChanged = false;
 
@@ -218,10 +212,27 @@ public:
         }
 
         const bool modeChanged = (events & bmdVideoInputDisplayModeChanged) != 0;
-        if (!formatChanged && !modeChanged)
-            return S_OK;
+        if (!formatChanged && !modeChanged) return S_OK;
 
-        owner->restartWithFormat(newMode->GetDisplayMode(), newPixelFormat);
+        const BMDDisplayMode detectedMode = newMode->GetDisplayMode();
+        owner->currentPixelFormat_ = newPixelFormat;
+
+        owner->input_->PauseStreams();
+        owner->input_->EnableVideoInput(detectedMode, newPixelFormat, bmdVideoInputEnableFormatDetection);
+        owner->input_->FlushStreams();
+        owner->input_->StartStreams();
+
+        // Cache this working (mode, pixelFormat) so start() can use it directly next time,
+        // bypassing the NTSC→format-detect cycle that only fires once per device power-on.
+        const int connKey = static_cast<int>(owner->connection_);
+        const uint64_t gen = owner->generation_.load();
+        QPointer<DeckLinkCapture> safeOwner(owner);
+        QMetaObject::invokeMethod(owner, [safeOwner, gen, connKey, detectedMode, newPixelFormat]() {
+            if (safeOwner && safeOwner->generation_.load() == gen)
+                safeOwner->modeCache_[connKey] = {static_cast<quint32>(detectedMode),
+                                                   static_cast<quint32>(newPixelFormat)};
+        }, Qt::QueuedConnection);
+
         return S_OK;
     }
 
@@ -236,20 +247,25 @@ public:
         if (!owner || !videoFrame) return S_OK;
 
         if (videoFrame->GetFlags() & bmdFrameHasNoInputSource) {
-            QPointer<DeckLinkCapture> safeOwner(owner);
-            QMetaObject::invokeMethod(owner, [safeOwner]() {
-                if (safeOwner) emit safeOwner->errorChanged(QStringLiteral("No input signal detected"));
-            }, Qt::QueuedConnection);
+            if (!noSourceReported_.exchange(true)) {
+                const uint64_t gen = owner->generation_.load();
+                QPointer<DeckLinkCapture> safeOwner(owner);
+                QMetaObject::invokeMethod(owner, [safeOwner, gen]() {
+                    if (safeOwner && safeOwner->generation_.load() == gen)
+                        emit safeOwner->errorChanged(QStringLiteral("No input signal detected"));
+                }, Qt::QueuedConnection);
+            }
             return S_OK;
         }
+        noSourceReported_.store(false);
 
         IDeckLinkVideoConversion* conv = owner->converter_;
         if (!conv) return S_OK;
 
         const long w = videoFrame->GetWidth();
         const long h = videoFrame->GetHeight();
+        if (w <= 0 || h <= 0) return S_OK;
 
-        // Lazily allocate / reallocate the CPU-side convert buffer when dimensions change.
         if (!owner->convertFrame_ ||
             owner->convertFrame_->GetWidth() != w ||
             owner->convertFrame_->GetHeight() != h) {
@@ -257,24 +273,15 @@ public:
             owner->convertFrame_ = new CpuVideoFrame(w, h);
         }
 
-        // Convert to BGRA into the pre-allocated CPU buffer.
-        // CpuVideoFrame implements IDeckLinkVideoBuffer so the SDK can write to it.
-        void* bytes = nullptr;
+        void* bytes    = nullptr;
         long  rowBytes = 0;
 
         if (videoFrame->GetPixelFormat() != kOutputFormat) {
-            if (conv->ConvertFrame(videoFrame, owner->convertFrame_) != S_OK) {
-                QPointer<DeckLinkCapture> safeOwner(owner);
-                QMetaObject::invokeMethod(owner, [safeOwner]() {
-                    if (safeOwner)
-                        emit safeOwner->errorChanged(QStringLiteral("DeckLink: frame conversion to BGRA failed"));
-                }, Qt::QueuedConnection);
+            if (conv->ConvertFrame(videoFrame, owner->convertFrame_) != S_OK)
                 return S_OK;
-            }
             bytes    = owner->convertFrame_->rawBytes();
             rowBytes = owner->convertFrame_->GetRowBytes();
         } else {
-            // Frame is already BGRA — read directly via IDeckLinkVideoBuffer.
             IDeckLinkVideoBuffer* buf = nullptr;
             if (videoFrame->QueryInterface(IID_IDeckLinkVideoBuffer,
                                            reinterpret_cast<void**>(&buf)) == S_OK && buf) {
@@ -285,16 +292,17 @@ public:
         }
 
         if (!bytes) return S_OK;
-        // bmdFormat8BitBGRA == BGRA in memory; QImage::Format_ARGB32 is the same layout on LE.
+
         QImage img(reinterpret_cast<const uchar*>(bytes),
                    static_cast<int>(w), static_cast<int>(h),
                    rowBytes, QImage::Format_ARGB32);
         if (img.isNull()) return S_OK;
         QImage copy = img.copy();
 
+        const uint64_t gen = owner->generation_.load();
         QPointer<DeckLinkCapture> safeOwner(owner);
-        QMetaObject::invokeMethod(owner, [safeOwner, copy]() {
-            if (!safeOwner) return;
+        QMetaObject::invokeMethod(owner, [safeOwner, gen, copy]() {
+            if (!safeOwner || safeOwner->generation_.load() != gen) return;
             emit safeOwner->errorChanged(QString());
             emit safeOwner->frameReady(copy);
         }, Qt::QueuedConnection);
@@ -304,6 +312,7 @@ public:
 
 private:
     std::atomic<ULONG> refCount_{1};
+    std::atomic<bool>  noSourceReported_{false};
     QMutex             mutex_;
     DeckLinkCapture*   owner_ = nullptr;
 };
@@ -358,41 +367,83 @@ IDeckLink* DeckLinkCapture::findDeviceById(const QString& persistentId) {
     return found;
 }
 
+// ── Device lifetime ───────────────────────────────────────────────────────────
+
+void DeckLinkCapture::openDevice() {
+    if (deviceId_.isEmpty()) return;
+
+    deckLink_ = findDeviceById(deviceId_);
+    if (!deckLink_) return;
+
+    // Acquire and hold the configuration interface for the device lifetime.
+    // Per SDK docs, IDeckLinkConfiguration must outlive the IDeckLink object it was
+    // obtained from — releasing it early can cause SetInt changes to be discarded.
+    deckLink_->QueryInterface(IID_IDeckLinkConfiguration,
+                              reinterpret_cast<void**>(&config_));
+
+#ifdef Q_OS_WIN
+    IDeckLinkVideoConversion* conv = nullptr;
+    CoCreateInstance(CLSID_CDeckLinkVideoConversion, nullptr, CLSCTX_ALL,
+                     IID_IDeckLinkVideoConversion, reinterpret_cast<void**>(&conv));
+    converter_ = conv;
+#else
+    converter_ = CreateVideoConversionInstance();
+#endif
+
+    if (!converter_) {
+        if (config_) { config_->Release(); config_ = nullptr; }
+        deckLink_->Release();
+        deckLink_ = nullptr;
+    }
+}
+
+void DeckLinkCapture::closeDevice() {
+    if (converter_) { converter_->Release(); converter_ = nullptr; }
+    if (config_)    { config_->Release();    config_    = nullptr; }
+    if (deckLink_)  { deckLink_->Release();  deckLink_  = nullptr; }
+}
+
 // ── Public API ────────────────────────────────────────────────────────────────
 
 DeckLinkCapture::DeckLinkCapture(QObject* parent) : QObject(parent) {}
 
 DeckLinkCapture::~DeckLinkCapture() {
     stop();
+    closeDevice();
     delete convertFrame_;
     convertFrame_ = nullptr;
 }
 
 void DeckLinkCapture::setDeviceId(const QString& id) {
     if (deviceId_ == id) return;
+    const bool wasStreaming = streaming_;
+    stop();
+    closeDevice();
     deviceId_ = id;
-    if (input_) start();
+    modeCache_.clear();
+    openDevice();
+    if (wasStreaming) start();
 }
 QString DeckLinkCapture::deviceId() const { return deviceId_; }
 
 void DeckLinkCapture::setConnection(Connection conn) {
     if (connection_ == conn) return;
     connection_ = conn;
-    if (input_) start();
+    if (streaming_) start();
 }
 DeckLinkCapture::Connection DeckLinkCapture::connection() const { return connection_; }
 
 void DeckLinkCapture::setAllow10Bit(bool allow) {
     if (allow10Bit_ == allow) return;
     allow10Bit_ = allow;
-    if (input_) start();
+    if (streaming_) start();
 }
 bool DeckLinkCapture::allow10Bit() const { return allow10Bit_; }
 
 void DeckLinkCapture::setDisplayMode(uint32_t mode) {
     if (displayMode_ == mode) return;
     displayMode_ = mode;
-    if (input_) start();
+    if (streaming_) start();
 }
 uint32_t DeckLinkCapture::displayMode() const { return displayMode_; }
 
@@ -477,7 +528,6 @@ QList<DeckLinkCapture::DisplayModeInfo> DeckLinkCapture::listDisplayModes(const 
     IDeckLink* dev = findDeviceById(persistentId);
     if (!dev) return out;
 
-    // Check format detection support for the "Auto" entry.
     bool supportsFormatDetection = false;
     {
         IDeckLinkProfileAttributes* attrs = nullptr;
@@ -536,68 +586,40 @@ QList<DeckLinkCapture::DisplayModeInfo> DeckLinkCapture::listDisplayModes(const 
 void DeckLinkCapture::start() {
     stop();
 
-    if (deviceId_.isEmpty()) {
+    const uint64_t gen = ++generation_;
+
+    if (!deckLink_ || !converter_) {
         emit errorChanged(QStringLiteral("No DeckLink device selected"));
         return;
     }
 
-    deckLink_ = findDeviceById(deviceId_);
-    if (!deckLink_) {
-        emit errorChanged(QStringLiteral("DeckLink device not found"));
-        return;
-    }
-
+    // Re-acquire input interface (following OBS: QueryInterface on each start).
     if (deckLink_->QueryInterface(IID_IDeckLinkInput,
-                                   reinterpret_cast<void**>(&input_)) != S_OK || !input_) {
-        cleanupDeckLink();
+                                  reinterpret_cast<void**>(&input_)) != S_OK || !input_) {
+        input_ = nullptr;
         emit errorChanged(QStringLiteral("Selected device does not support input capture"));
         return;
     }
 
-#ifdef Q_OS_WIN
-    {
-        IDeckLinkVideoConversion* conv = nullptr;
-        CoCreateInstance(CLSID_CDeckLinkVideoConversion, nullptr, CLSCTX_ALL,
-                         IID_IDeckLinkVideoConversion, reinterpret_cast<void**>(&conv));
-        converter_ = conv;
-    }
-#else
-    converter_ = CreateVideoConversionInstance();
-#endif
-    if (!converter_) {
-        cleanupDeckLink();
-        emit errorChanged(QStringLiteral("DeckLink: CreateVideoConversionInstance failed"));
-        return;
-    }
-
-    callback_ = new InputCallback(this);
-    input_->SetCallback(callback_);
-
-    // Set the physical input connection if the user chose one explicitly.
+    // Switch physical input connector using the persistent config interface.
     const BMDVideoConnection bmdConn = toBMDConnection(connection_);
-    if (bmdConn != bmdVideoConnectionUnspecified) {
-        IDeckLinkConfiguration* config = nullptr;
-        if (deckLink_->QueryInterface(IID_IDeckLinkConfiguration,
-                                      reinterpret_cast<void**>(&config)) == S_OK && config) {
-            const HRESULT cr = config->SetInt(bmdDeckLinkConfigVideoInputConnection,
-                                              static_cast<int64_t>(bmdConn));
-            config->Release();
-            if (cr != S_OK) {
-                cleanupDeckLink();
-                emit errorChanged(QStringLiteral("Cannot set input connection (%1) — try selecting in Blackmagic Desktop Video Setup")
-                                  .arg(hresultToString(cr)));
-                return;
-            }
+    if (bmdConn != bmdVideoConnectionUnspecified && config_) {
+        const HRESULT cr = config_->SetInt(bmdDeckLinkConfigVideoInputConnection,
+                                           static_cast<int64_t>(bmdConn));
+        if (cr != S_OK) {
+            input_->Release(); input_ = nullptr;
+            emit errorChanged(
+                QStringLiteral("Cannot set input connection (%1)").arg(hresultToString(cr)));
+            return;
         }
     }
 
-    // Decide start mode and flags based on user selection.
-    BMDDisplayMode      startMode  = static_cast<BMDDisplayMode>(displayMode_);
-    BMDVideoInputFlags  startFlags = bmdVideoInputFlagDefault;
-    currentPixelFormat_            = allow10Bit_ ? bmdFormat10BitYUV : bmdFormat8BitYUV;
+    currentPixelFormat_ = allow10Bit_ ? bmdFormat10BitYUV : bmdFormat8BitYUV;
+
+    BMDDisplayMode     startMode  = static_cast<BMDDisplayMode>(displayMode_);
+    BMDVideoInputFlags startFlags = bmdVideoInputFlagDefault;
 
     if (displayMode_ == 0) {
-        // Auto mode: check if format detection is supported.
         bool supportsFormatDetection = false;
         {
             IDeckLinkProfileAttributes* attrs = nullptr;
@@ -615,105 +637,69 @@ void DeckLinkCapture::start() {
                 attrs->Release();
             }
         }
-
-        if (supportsFormatDetection) {
-            // Check if the hardware already reports a signal — use it as start mode.
-            BMDDisplayMode detected = bmdModeUnknown;
-            {
-                IDeckLinkStatus* statusIface = nullptr;
-                if (deckLink_->QueryInterface(IID_IDeckLinkStatus,
-                                              reinterpret_cast<void**>(&statusIface)) == S_OK && statusIface) {
-                    int64_t mv = 0;
-                    if (statusIface->GetInt(bmdDeckLinkStatusDetectedVideoInputMode, &mv) == S_OK)
-                        detected = static_cast<BMDDisplayMode>(mv);
-                    statusIface->Release();
-                }
-            }
-            startMode  = (detected != bmdModeUnknown && detected != 0) ? detected : bmdModeHD1080p30;
-            startFlags = bmdVideoInputEnableFormatDetection;
+        // If we've seen this connection before, start with the known good mode so the
+        // hardware delivers frames immediately — VideoInputFormatChanged only fires once
+        // per device power-on, so NTSC→detect only works on the very first start.
+        // Keep format detection enabled so genuine format changes are still handled.
+        const int connKey = static_cast<int>(connection_);
+        if (modeCache_.contains(connKey)) {
+            const auto& cached = modeCache_[connKey];
+            startMode           = static_cast<BMDDisplayMode>(cached.first);
+            currentPixelFormat_ = static_cast<BMDPixelFormat>(cached.second);
         } else {
-            // No format detection: guess and warn.
-            startMode = bmdModeHD1080p30;
-            emit errorChanged(QStringLiteral("No signal detected on selected input. Check cable and signal format."));
+            startMode = bmdModeNTSC;
         }
+        startFlags = supportsFormatDetection ? bmdVideoInputEnableFormatDetection
+                                             : bmdVideoInputFlagDefault;
     }
 
     const HRESULT en = input_->EnableVideoInput(startMode, currentPixelFormat_, startFlags);
     if (en != S_OK) {
-        cleanupDeckLink();
-        emit errorChanged(QStringLiteral("EnableVideoInput failed (%1)").arg(hresultToString(en)));
+        input_->Release(); input_ = nullptr;
+        emit errorChanged(
+            QStringLiteral("EnableVideoInput failed (%1)").arg(hresultToString(en)));
         return;
     }
+
+    callback_ = new InputCallback(this);
+    input_->SetCallback(callback_);
 
     const HRESULT st = input_->StartStreams();
     if (st != S_OK) {
-        cleanupDeckLink();
-        emit errorChanged(QStringLiteral("StartStreams failed (%1)").arg(hresultToString(st)));
+        input_->SetCallback(nullptr);
+        callback_->Release(); callback_ = nullptr;
+        input_->DisableVideoInput();
+        input_->Release(); input_ = nullptr;
+        emit errorChanged(
+            QStringLiteral("StartStreams failed (%1)").arg(hresultToString(st)));
         return;
     }
 
-    if (displayMode_ != 0)
-        emit errorChanged(QString());
-    else if (startFlags & bmdVideoInputEnableFormatDetection)
-        emit errorChanged(QStringLiteral("Waiting for signal…"));
+    streaming_ = true;
+    emit errorChanged(QStringLiteral("Waiting for signal…"));
 }
 
 void DeckLinkCapture::stop() {
-    if (!input_ && !deckLink_) return;
+    if (!streaming_) return;
+    streaming_ = false;
+
     if (input_) {
         input_->StopStreams();
-        input_->FlushStreams();
         input_->DisableVideoInput();
-        input_->SetCallback(nullptr);
     }
-    cleanupDeckLink();
-}
-
-void DeckLinkCapture::cleanupDeckLink() {
-    if (input_ && callback_)
-        input_->SetCallback(nullptr);
-
     if (callback_) {
+        if (input_) input_->SetCallback(nullptr);
         callback_->clearOwner();
         callback_->Release();
         callback_ = nullptr;
-    }
-    if (converter_) {
-        converter_->Release();
-        converter_ = nullptr;
     }
     if (input_) {
         input_->Release();
         input_ = nullptr;
     }
-    if (deckLink_) {
-        deckLink_->Release();
-        deckLink_ = nullptr;
-    }
-    // convertFrame_ is kept alive for reuse; freed in destructor or on next start().
+
     delete convertFrame_;
     convertFrame_ = nullptr;
-}
-
-void DeckLinkCapture::restartWithFormat(BMDDisplayMode mode, BMDPixelFormat pixelFormat) {
-    if (!input_) return;
-
-    currentPixelFormat_ = pixelFormat;
-
-    input_->PauseStreams();
-
-    const BMDVideoInputFlags flags = (displayMode_ == 0)
-                                     ? bmdVideoInputEnableFormatDetection
-                                     : bmdVideoInputFlagDefault;
-    const HRESULT en = input_->EnableVideoInput(mode, pixelFormat, flags);
-    if (en != S_OK) {
-        emit errorChanged(QStringLiteral("DeckLink reconfigure failed (%1)").arg(hresultToString(en)));
-        return;
-    }
-    input_->FlushStreams();
-    const HRESULT st = input_->StartStreams();
-    if (st != S_OK)
-        emit errorChanged(QStringLiteral("DeckLink StartStreams failed (%1)").arg(hresultToString(st)));
 }
 
 #ifdef Q_OS_WIN

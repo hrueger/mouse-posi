@@ -538,6 +538,8 @@ MainWindow::MainWindow(NdiReceiver* ndi,
             return;
         if (!err.isEmpty())
             statusNdi_->setText("DeckLink: " + err);
+        else
+            statusNdi_->setText("DeckLink: " + videoSourceName_);
     });
 
     connect(trackerBar_, &TrackerBar::trackerSelected,
@@ -1152,6 +1154,7 @@ void MainWindow::setNdiSource(const QString& source) {
 
     webcam_->stop();
     decklink_->stop();
+    video_->setFrame(QImage{});
     ndi_->connectToSource(source);
     statusNdi_->setText(source.isEmpty() ? "No NDI source" : "NDI: " + source + " (connecting…)");
     streamPanel_->setCurrentNdiSource(source);
@@ -1174,6 +1177,7 @@ void MainWindow::setWebcamSource(const QString& device) {
     // Stop NDI decoding to reduce CPU/network usage when using the webcam.
     ndi_->disconnectFromSource();
     decklink_->stop();
+    video_->setFrame(QImage{});
 
     webcam_->setDeviceDescription(device);
     webcam_->start();
@@ -1219,6 +1223,7 @@ void MainWindow::setDecklinkSource(const QString& deviceId, const QString& conne
     }
 
     decklink_->stop();
+    video_->setFrame(QImage{});
     decklink_->setDeviceId(deviceId);
     decklink_->setConnection(conn);
     decklink_->setDisplayMode(displayMode);
@@ -1434,6 +1439,10 @@ void MainWindow::updateStatsTimer() {
     double elapsed = statsElapsed_.restart() / 1000.0;
     currentFps_  = frameCount_ / elapsed;
     frameCount_  = 0;
+    if (elapsed > 0.0) {
+        videoFps_ = videoFrameCount_ / elapsed;
+        videoFrameCount_ = 0;
+    }
 
     // PSN stats
     int txRate = 0, rxRate = 0;
@@ -1536,13 +1545,19 @@ void MainWindow::updateSessionStatus() {
     leaveSessionBtn_->setVisible(isJoinedUser);
 }
 
+static QString fpsStr(double fps) {
+    if (fps < 1.0) return QString();
+    return QStringLiteral("  %1 fps").arg(qRound(fps));
+}
+
 void MainWindow::onFrameReady(const QImage& frame) {
     if (videoSourceKind_ != VideoSourceKind::Ndi)
         return;
 
     handleVideoFrame(frame);
-    statusNdi_->setText(QString("NDI: %1  %2×%3")
-        .arg(videoSourceName_).arg(frame.width()).arg(frame.height()));
+    statusNdi_->setText(QString("NDI: %1  %2×%3%4")
+        .arg(videoSourceName_).arg(frame.width()).arg(frame.height())
+        .arg(fpsStr(videoFps_)));
 }
 
 void MainWindow::onWebcamFrameReady(const QImage& frame) {
@@ -1550,8 +1565,9 @@ void MainWindow::onWebcamFrameReady(const QImage& frame) {
         return;
 
     handleVideoFrame(frame);
-    statusNdi_->setText(QString("Webcam: %1  %2×%3")
-        .arg(videoSourceName_).arg(frame.width()).arg(frame.height()));
+    statusNdi_->setText(QString("Webcam: %1  %2×%3%4")
+        .arg(videoSourceName_).arg(frame.width()).arg(frame.height())
+        .arg(fpsStr(videoFps_)));
 }
 
 void MainWindow::onDecklinkFrameReady(const QImage& frame) {
@@ -1559,11 +1575,14 @@ void MainWindow::onDecklinkFrameReady(const QImage& frame) {
         return;
 
     handleVideoFrame(frame);
-    statusNdi_->setText(QString("DeckLink: %1  %2×%3")
-        .arg(videoSourceName_).arg(frame.width()).arg(frame.height()));
+    statusNdi_->setText(QString("DeckLink: %1  %2×%3%4")
+        .arg(videoSourceName_).arg(frame.width()).arg(frame.height())
+        .arg(fpsStr(videoFps_)));
 }
 
 void MainWindow::handleVideoFrame(const QImage& frame) {
+    ++videoFrameCount_;
+
     QSize sz(frame.width(), frame.height());
     if (sz != lastVideoFrameSize_) {
         log(QString("VIDEO_SIZE  %1x%2  (was %3x%4)")
