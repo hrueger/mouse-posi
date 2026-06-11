@@ -8,6 +8,7 @@ class QFormLayout;
 class QDoubleSpinBox;
 class QLineEdit;
 class QLabel;
+class QComboBox;
 
 class StagePropertiesPanel : public QWidget {
     Q_OBJECT
@@ -18,10 +19,14 @@ public:
     void setSelectedObject(int id);
     void setHas3DCalibration(bool has3D);
     void setMvrImport(int index, const MvrImport& import);
+    void setTrackers(const QList<TrackerConfig>& trackers);
+    void setMvrFixture(int importIdx, int layerIdx, int objIdx,
+                       const MvrImportData& importData, const QList<TrackerConfig>& trackers);
 
 signals:
     void objectEdited(const StageObject& obj);
     void mvrImportEdited(int index, MvrImport import);
+    void mvrFixtureTrackerLinkChanged(int importIdx, int layerIdx, int objIdx, int trackerLink);
 
 private slots:
     void onPropertiesChanged();
@@ -65,10 +70,21 @@ private:
     QDoubleSpinBox* mvrOffsetZSpin_;
     QDoubleSpinBox* mvrRotSpin_;
 
+    // MVR fixture properties (tracker link)
+    QWidget*        fixtureGroup_;
+    QLabel*         fixtureNameLabel_;
+    QLabel*         fixtureDmxLabel_;
+    QLabel*         fixtureGdtfLabel_;
+    QComboBox*      trackerLinkCombo_;
+    int             fixtureImportIdx_ = -1;
+    int             fixtureLayerIdx_  = -1;
+    int             fixtureObjIdx_    = -1;
+
     bool has3DCalib_ = false;
 
-    QList<StageObject> objects_;
-    MvrImport          mvrImport_;
+    QList<StageObject>  objects_;
+    QList<TrackerConfig> trackers_;
+    MvrImport           mvrImport_;
     int  mvrImportIndex_ = -1;
     int  selectedId_   = -999;
     bool updatingForm_ = false;

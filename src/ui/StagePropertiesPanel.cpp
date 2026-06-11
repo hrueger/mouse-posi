@@ -3,6 +3,7 @@
 #include <QDoubleSpinBox>
 #include <QLineEdit>
 #include <QLabel>
+#include <QComboBox>
 #include <QFormLayout>
 #include <QtMath>
 #include <cmath>
@@ -113,6 +114,35 @@ StagePropertiesPanel::StagePropertiesPanel(QWidget* parent) : QWidget(parent)
     mvrPropsGroup_->hide();
     layout->addWidget(mvrPropsGroup_);
 
+    // ── MVR fixture properties (tracker link) ─────────────────────────────────
+    fixtureGroup_ = new QWidget;
+    auto* fixForm = new QFormLayout(fixtureGroup_);
+    fixForm->setRowWrapPolicy(QFormLayout::DontWrapRows);
+    fixForm->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+    fixForm->setLabelAlignment(Qt::AlignRight);
+
+    fixtureNameLabel_ = new QLabel;
+    fixtureDmxLabel_  = new QLabel;
+    fixtureGdtfLabel_ = new QLabel;
+    fixtureGdtfLabel_->setWordWrap(true);
+    trackerLinkCombo_ = new QComboBox;
+
+    fixForm->addRow("Fixture:", fixtureNameLabel_);
+    fixForm->addRow("DMX:", fixtureDmxLabel_);
+    fixForm->addRow("GDTF:", fixtureGdtfLabel_);
+    fixForm->addRow("Tracker:", trackerLinkCombo_);
+
+    connect(trackerLinkCombo_, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, [this](int idx) {
+        if (updatingForm_) return;
+        if (fixtureImportIdx_ < 0 || fixtureLayerIdx_ < 0 || fixtureObjIdx_ < 0) return;
+        const int trackerLink = (idx == 0) ? -1 : trackerLinkCombo_->itemData(idx).toInt();
+        emit mvrFixtureTrackerLinkChanged(fixtureImportIdx_, fixtureLayerIdx_, fixtureObjIdx_, trackerLink);
+    });
+
+    fixtureGroup_->hide();
+    layout->addWidget(fixtureGroup_);
+
     layout->addStretch();
 
     for (auto* s : {heightSpin_, xSpin_, zSpin_, widthSpin_, depthSpin_, rotSpin_, fovSpin_})
@@ -153,6 +183,50 @@ void StagePropertiesPanel::setHas3DCalibration(bool has3D)
         updatePropertiesForm(-1);
 }
 
+void StagePropertiesPanel::setTrackers(const QList<TrackerConfig>& trackers) {
+    trackers_ = trackers;
+}
+
+void StagePropertiesPanel::setMvrFixture(int importIdx, int layerIdx, int objIdx,
+                                          const MvrImportData& importData,
+                                          const QList<TrackerConfig>& trackers) {
+    trackers_ = trackers;
+    fixtureImportIdx_ = importIdx;
+    fixtureLayerIdx_  = layerIdx;
+    fixtureObjIdx_    = objIdx;
+    selectedId_ = -999;
+
+    if (layerIdx < 0 || layerIdx >= importData.layers.size()) return;
+    const auto& layer = importData.layers[layerIdx];
+    if (objIdx < 0 || objIdx >= layer.objects.size()) return;
+    const auto& obj = layer.objects[objIdx];
+
+    updatingForm_ = true;
+    fixtureNameLabel_->setText(obj.name.isEmpty() ? QStringLiteral("(unnamed)") : obj.name);
+    fixtureDmxLabel_->setText(QString("%1.%2").arg(obj.universe).arg(obj.dmxAddress));
+    fixtureGdtfLabel_->setText(obj.gdtfSpec.isEmpty() ? QStringLiteral("—") : obj.gdtfSpec);
+
+    trackerLinkCombo_->clear();
+    trackerLinkCombo_->addItem(QStringLiteral("(none)"), -1);
+    for (const auto& t : trackers)
+        trackerLinkCombo_->addItem(t.name, t.id);
+
+    // Select the current link
+    int comboIdx = 0;
+    for (int i = 1; i < trackerLinkCombo_->count(); ++i) {
+        if (trackerLinkCombo_->itemData(i).toInt() == obj.trackerLink) {
+            comboIdx = i; break;
+        }
+    }
+    trackerLinkCombo_->setCurrentIndex(comboIdx);
+    updatingForm_ = false;
+
+    propsGroup_->hide();
+    mvrPropsGroup_->hide();
+    noSelectionLabel_->hide();
+    fixtureGroup_->show();
+}
+
 void StagePropertiesPanel::setMvrImport(int index, const MvrImport& import)
 {
     mvrImportIndex_ = index;
@@ -170,6 +244,9 @@ void StagePropertiesPanel::setMvrImport(int index, const MvrImport& import)
     mvrRotSpin_->setValue(double(import.rotDeg));
     updatingForm_ = false;
 
+    propsGroup_->hide();
+    fixtureGroup_->hide();
+    noSelectionLabel_->hide();
     mvrPropsGroup_->show();
 }
 
@@ -193,6 +270,7 @@ void StagePropertiesPanel::onMvrPropertiesChanged()
 void StagePropertiesPanel::updatePropertiesForm(int id)
 {
     mvrPropsGroup_->hide();
+    fixtureGroup_->hide();
 
     if (id == -999) {
         propsGroup_->hide();

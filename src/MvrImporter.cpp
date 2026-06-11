@@ -1,5 +1,6 @@
 #include "MvrImporter.h"
 
+#include <QDir>
 #include <QFile>
 #include <QMatrix4x4>
 #include <QTemporaryFile>
@@ -417,6 +418,109 @@ static void appendGeometryFromGdtfNode(IGdtfGeometry* geom,
     }
 }
 
+// ─── GDTF DMX profile extraction (pan/tilt channels) ────────────────────────
+
+static GdtfDmxProfile extractDmxProfile(IGdtfFixture* fixture, const QString& activeModeName)
+{
+    GdtfDmxProfile profile;
+    if (!fixture) return profile;
+
+    size_t modeCount = 0;
+    if (fixture->GetDmxModeCount(modeCount) != kVCOMError_NoError || modeCount == 0)
+        return profile;
+
+    // Find the mode the MVR scene requests; fall back to mode 0.
+    size_t modeIdx = 0;
+    if (!activeModeName.isEmpty()) {
+        for (size_t mi = 0; mi < modeCount; ++mi) {
+            IGdtfDmxModePtr m;
+            if (fixture->GetDmxModeAt(mi, &m) == kVCOMError_NoError && m) {
+                if (toQString(m->GetName()) == activeModeName) {
+                    modeIdx = mi;
+                    break;
+                }
+            }
+        }
+    }
+
+    IGdtfDmxModePtr mode;
+    if (fixture->GetDmxModeAt(modeIdx, &mode) != kVCOMError_NoError || !mode)
+        return profile;
+
+    profile.modeName = toQString(mode->GetName());
+
+    size_t breakCount = 0;
+    mode->GetBreakCount(breakCount);
+    if (breakCount > 0) {
+        size_t fp = 0;
+        mode->GetFootprintForBreak(0, fp);
+        profile.footprint = int(fp);
+    }
+
+    size_t channelCount = 0;
+    if (mode->GetDmxChannelCount(channelCount) != kVCOMError_NoError)
+        return profile;
+
+    int maxSlot = 0;
+    for (size_t ci = 0; ci < channelCount; ++ci) {
+        IGdtfDmxChannelPtr channel;
+        if (mode->GetDmxChannelAt(ci, &channel) != kVCOMError_NoError || !channel)
+            continue;
+
+        Sint32 coarse = -1, fine = -1;
+        channel->GetCoarse(coarse);
+        channel->GetFine(fine);
+        if (coarse < 0) continue;
+        maxSlot = qMax(maxSlot, int(coarse));
+        if (fine >= 0) maxSlot = qMax(maxSlot, int(fine));
+
+        size_t logCount = 0;
+        if (channel->GetLogicalChannelCount(logCount) != kVCOMError_NoError || logCount == 0)
+            continue;
+
+        IGdtfDmxLogicalChannelPtr logCh;
+        if (channel->GetLogicalChannelAt(0, &logCh) != kVCOMError_NoError || !logCh)
+            continue;
+
+        IGdtfAttributePtr attr;
+        if (logCh->GetAttribute(&attr) != kVCOMError_NoError || !attr)
+            continue;
+
+        const QString attrName = toQString(attr->GetName());
+        const bool isPan  = (attrName == QStringLiteral("Pan"));
+        const bool isTilt = (attrName == QStringLiteral("Tilt"));
+        if (!isPan && !isTilt) continue;
+
+        GdtfChannelInfo info;
+        info.address = int(coarse);    // 1-based offset within mode footprint
+        info.address2 = (fine >= 0) ? int(fine) : -1;
+        info.is16bit  = (fine >= 0);
+
+        // Physical range from the first/default channel function
+        size_t fnCount = 0;
+        if (logCh->GetDmxFunctionCount(fnCount) == kVCOMError_NoError && fnCount > 0) {
+            IGdtfDmxChannelFunctionPtr fn;
+            if (logCh->GetDmxFunctionAt(0, &fn) == kVCOMError_NoError && fn) {
+                double from = -270.0, to = 270.0;
+                fn->GetPhysicalStart(from);
+                fn->GetPhysicalEnd(to);
+                info.minDeg = float(from);
+                info.maxDeg = float(to);
+            }
+        }
+
+        if (isPan)  profile.pan  = info;
+        else        profile.tilt = info;
+    }
+
+    if (profile.footprint == 0 && maxSlot > 0)
+        profile.footprint = maxSlot;
+
+    // Valid as long as the GDTF was readable (has at least one mode)
+    profile.valid = true;
+    return profile;
+}
+
 static void appendGeometryFromGdtfFixture(ISceneObj* sceneObj,
                                           const QMatrix4x4& fixtureXform,
                                           MvrObject& outObject)
@@ -455,6 +559,11 @@ static MvrObject readSceneObject(ISceneObj* sceneObj,
     if (sceneObj->GetTransfromMatrix(matrix) == kVCOMError_NoError) {
         const QMatrix4x4 xform = mvrToViewMatrix(matrix);
         outObject.positionM = positionFromMatrix(matrix);
+        // Store rotation part of the transform (zero translation so mapVector works correctly).
+        outObject.xformRot = xform;
+        outObject.xformRot(0, 3) = 0.f;
+        outObject.xformRot(1, 3) = 0.f;
+        outObject.xformRot(2, 3) = 0.f;
         appendGeometryFromSceneObject(sceneObj, xform, zipPath, outObject);
         if (outObject.type == MvrObject::Type::Fixture && outObject.meshes.isEmpty())
             appendGeometryFromGdtfFixture(sceneObj, xform, outObject);
@@ -464,16 +573,30 @@ static MvrObject readSceneObject(ISceneObj* sceneObj,
         outObject.gdtfSpec = toQString(sceneObj->GetGdtfName());
 
         Sint32 unitNumber = 0;
-        if (sceneObj->GetUnitNumber(unitNumber) == kVCOMError_NoError) {
+        if (sceneObj->GetUnitNumber(unitNumber) == kVCOMError_NoError)
             outObject.unitNumber = int(unitNumber);
-        }
+        outObject.fixtureId = toQString(sceneObj->GetFixtureId());
 
         size_t addressCount = 0;
         if (sceneObj->GetAdressCount(addressCount) == kVCOMError_NoError && addressCount > 0) {
             SDmxAdress address{};
             if (sceneObj->GetAdressAt(0, address) == kVCOMError_NoError) {
-                outObject.dmxAddress = int(address.fAbsuluteAdress);
+                // fAbsuluteAdress is 1-based across the whole DMX space (U1.C1=1, U2.C1=513, …)
+                const int absAddr = int(address.fAbsuluteAdress);
+                if (absAddr > 0) {
+                    outObject.universe   = (absAddr - 1) / 512 + 1;
+                    outObject.dmxAddress = (absAddr - 1) % 512 + 1; // 1-based within universe
+                } else if (address.fBreakId > 0) {
+                    outObject.universe   = int(address.fBreakId);
+                    outObject.dmxAddress = 1;
+                }
             }
+        }
+
+        IGdtfFixturePtr gdtfFixture;
+        if (sceneObj->GetGdtfFixture(&gdtfFixture) == kVCOMError_NoError && gdtfFixture) {
+            const QString mvrMode = toQString(sceneObj->GetGdtfMode());
+            outObject.gdtfProfile = extractDmxProfile(gdtfFixture, mvrMode);
         }
     }
 
@@ -590,4 +713,88 @@ MvrImporter::Result MvrImporter::import(const QString& filePath)
         }
     }
     return result;
+}
+
+// Generate a simple axis-aligned box mesh (12 triangles) for fallback preview.
+static QVector<MvrMesh> makeBoxMesh(float w, float h, float d)
+{
+    // Clamp to sane defaults
+    if (w < 0.01f) w = 0.3f;
+    if (h < 0.01f) h = 0.6f;
+    if (d < 0.01f) d = 0.3f;
+
+    const float hw = w * 0.5f, hd = d * 0.5f;
+    // Centred at origin, Y from 0..h (fixture stands on floor)
+    struct Face { QVector3D v[4]; QVector3D n; };
+    const Face faces[] = {
+        { { {-hw,0,hd},{hw,0,hd},{hw,h,hd},{-hw,h,hd} }, {0,0,1} },   // front
+        { { {hw,0,-hd},{-hw,0,-hd},{-hw,h,-hd},{hw,h,-hd} }, {0,0,-1} }, // back
+        { { {-hw,0,-hd},{-hw,0,hd},{-hw,h,hd},{-hw,h,-hd} }, {-1,0,0} }, // left
+        { { {hw,0,hd},{hw,0,-hd},{hw,h,-hd},{hw,h,hd} }, {1,0,0} },   // right
+        { { {-hw,h,hd},{hw,h,hd},{hw,h,-hd},{-hw,h,-hd} }, {0,1,0} }, // top
+        { { {hw,0,hd},{-hw,0,hd},{-hw,0,-hd},{hw,0,-hd} }, {0,-1,0} }, // bottom
+    };
+
+    MvrMesh mesh;
+    for (const auto& f : faces) {
+        // Two triangles per face
+        const int idx[6] = {0,1,2, 0,2,3};
+        for (int i : idx) {
+            mesh.vertices.append(f.v[i]);
+            mesh.normals.append(f.n);
+        }
+    }
+
+    return { mesh };
+}
+
+QVector<MvrMesh> MvrImporter::loadGdtfMeshes(const QString& gdtfPath)
+{
+    IGdtfFixturePtr fix(IID_IGdtfFixture);
+    if (!fix) return {};
+    const QByteArray p = gdtfPath.toUtf8();
+    if (fix->ReadFromFile(p.constData()) != kVCOMError_NoError) return {};
+
+    MvrObject outObject;
+    const GeomRotMap emptyRot;
+
+    size_t geomCount = 0;
+    if (fix->GetGeometryCount(geomCount) != kVCOMError_NoError) return {};
+
+    for (size_t i = 0; i < geomCount; ++i) {
+        IGdtfGeometryPtr geom;
+        if (fix->GetGeometryAt(i, &geom) == kVCOMError_NoError && geom)
+            appendGeometryFromGdtfNode(geom, QMatrix4x4(), emptyRot, outObject);
+    }
+
+    if (!outObject.meshes.isEmpty())
+        return outObject.meshes;
+
+    // No GLB geometry found (fixture may only have 3DS models or no geometry).
+    // Fall back to a box built from the first model's dimensions, if available.
+    size_t modelCount = 0;
+    if (fix->GetModelCount(modelCount) == kVCOMError_NoError && modelCount > 0) {
+        IGdtfModelPtr model;
+        if (fix->GetModelAt(0, &model) == kVCOMError_NoError && model) {
+            double w = 0.3, h = 0.6, d = 0.3;
+            model->GetWidth(w);
+            model->GetHeight(h);
+            model->GetLength(d);
+            // GDTF model dimensions are in millimetres
+            return makeBoxMesh(float(w * 0.001), float(h * 0.001), float(d * 0.001));
+        }
+    }
+
+    return {};
+}
+
+QVector<MvrMesh> MvrImporter::loadGdtfMeshesFromData(const QByteArray& gdtfData)
+{
+    QTemporaryFile tmp;
+    tmp.setFileTemplate(QDir::tempPath() + "/onpoint_gdtf_XXXXXX.gdtf");
+    tmp.setAutoRemove(true);
+    if (!tmp.open()) return {};
+    tmp.write(gdtfData);
+    tmp.flush();
+    return loadGdtfMeshes(tmp.fileName());
 }

@@ -8,6 +8,13 @@
 #include "PsnSender.h"
 #include "PsnReceiver.h"
 #include "SacnReceiver.h"
+#include "DmxSender.h"
+#include "DmxReceiver.h"
+#include "PanTiltCalculator.h"
+#include "Calibration.h"
+#include "adapters/InputAdapterBase.h"
+#include "adapters/SacnArtNetInputAdapter.h"
+#include "adapters/MidiInputAdapter.h"
 #include "SessionManager.h"
 #include "ui/TrackersPanel.h"
 #include "ui/TrackerBar.h"
@@ -20,7 +27,14 @@
 #include "ui/StageItemsPanel.h"
 #include "ui/StagePropertiesPanel.h"
 #include "ui/WelcomeScreen.h"
+#include "ui/SettingsDialog.h"
+#include "ui/FixturesPanel.h"
+#include "ui/GdtfLibraryDialog.h"
+#include "ui/NewProjectWizard.h"
+#include "GdtfLibrary.h"
+#include "ui/StreamSourcePanel.h"
 #include <oclero/qlementine/style/ThemeManager.hpp>
+#include <QToolBar>
 #include <QApplication>
 #include <QPropertyAnimation>
 #include <QStyleHints>
@@ -46,6 +60,7 @@
 #include <QEvent>
 #include <QSet>
 #include <QDateTime>
+#include <QMatrix4x4>
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
@@ -78,7 +93,9 @@ MainWindow::MainWindow(NdiReceiver* ndi,
     sacnReceiver_->moveToThread(sacnThread_);
     connect(sacnThread_, &QThread::finished, sacnReceiver_, &QObject::deleteLater);
     sacnThread_->start();
-    sessionMgr_   = new SessionManager(this);
+    dmxSender_   = new DmxSender(this);
+    dmxReceiver_ = new DmxReceiver(this);
+    sessionMgr_  = new SessionManager(this);
 
     sessionPanel_          = new SessionPanel(sessionMgr_);
     stage3DPanel_          = new Stage3DPanel;
@@ -87,8 +104,11 @@ MainWindow::MainWindow(NdiReceiver* ndi,
     streamPanel_     = new StreamSourcePanel(ndi_);
     calibrationPanel_= new CalibrationPanel(video_, ndi_, this);
     trackersPanel_   = new TrackersPanel;
-    networkPanel_    = new NetworkSettingsPanel;
     statsPanel_      = new StatsPanel;
+    fixturesPanel_   = new FixturesPanel;
+    settingsDialog_  = new SettingsDialog(this);
+    // Stream source panel moves into settings dialog
+    settingsDialog_->setStreamSourcePanel(streamPanel_);
 
     // ── Dock layout ───────────────────────────────────────────────────────
     // Central widget: contains the welcome screen; shrunk to 0x0 in workspace mode
@@ -138,22 +158,21 @@ MainWindow::MainWindow(NdiReceiver* ndi,
     });
 
     sessionDock_     = makeDock("Session",       "dock_session",     sessionPanel_);
-    streamDock_      = makeDock("Stream Source", "dock_stream",      streamPanel_);
     calibrationDock_ = makeDock("Calibration",   "dock_calibration", calibrationPanel_);
     trackersDock_    = makeDock("Trackers",       "dock_trackers",    trackersPanel_);
-    networkDock_     = makeDock("Network",        "dock_network",     networkPanel_);
     statsDock_       = makeDock("Stats",          "dock_stats",       statsPanel_);
-    stage3DDock_          = makeDock("Stage 3D",              "dock_stage3d",          stage3DPanel_);
-    stageItemsDock_       = makeDock("Stage Objects",         "dock_stage_items",      stageItemsPanel_);
-    stagePropertiesDock_  = makeDock("Object Properties",     "dock_stage_properties", stagePropertiesPanel_);
-    panelDocks_           = {sessionDock_, streamDock_, calibrationDock_,
-                             trackersDock_, networkDock_, statsDock_};
+    stage3DDock_          = makeDock("Stage 3D",          "dock_stage3d",          stage3DPanel_);
+    stageItemsDock_       = makeDock("Stage Objects",     "dock_stage_items",      stageItemsPanel_);
+    stagePropertiesDock_  = makeDock("Object Properties", "dock_stage_properties", stagePropertiesPanel_);
+    fixturesDock_         = makeDock("Fixtures",          "dock_fixtures",         fixturesPanel_);
+    panelDocks_           = {sessionDock_, calibrationDock_,
+                             trackersDock_, statsDock_};
 
-    // Default layout: all 6 panels tabified on the right
+    // Default layout: all 4 panels tabified on the right
     addDockWidget(Qt::RightDockWidgetArea, sessionDock_);
     for (auto* d : panelDocks_.sliced(1))
         tabifyDockWidget(panelDocks_[0], d);
-    streamDock_->raise();   // show "Stream Source" tab by default
+    sessionDock_->raise();
 
     // Stage 3D dock tabs alongside video on the left
     addDockWidget(Qt::LeftDockWidgetArea, stage3DDock_);
@@ -167,6 +186,10 @@ MainWindow::MainWindow(NdiReceiver* ndi,
     // Object properties dock: tabified alongside stage objects
     addDockWidget(Qt::RightDockWidgetArea, stagePropertiesDock_);
     tabifyDockWidget(stageItemsDock_, stagePropertiesDock_);
+
+    // Fixtures dock: tabified alongside object properties
+    addDockWidget(Qt::RightDockWidgetArea, fixturesDock_);
+    tabifyDockWidget(stagePropertiesDock_, fixturesDock_);
 
     // Default sizing — overridden by saved state on subsequent launches
     resizeDocks({videoDock_},   {1160}, Qt::Horizontal);
@@ -330,18 +353,23 @@ MainWindow::MainWindow(NdiReceiver* ndi,
             layerData.enabled = layer.enabled;
             for (const auto& obj : layer.objects) {
                 MvrObjectData objData;
-                objData.name       = obj.name;
-                objData.type       = MvrObjectData::Type(int(obj.type));
-                objData.positionM  = obj.positionM;
-                objData.gdtfSpec   = obj.gdtfSpec;
-                objData.unitNumber = obj.unitNumber;
-                objData.dmxAddress = obj.dmxAddress;
-                objData.enabled    = obj.enabled;
+                objData.name        = obj.name;
+                objData.type        = MvrObjectData::Type(int(obj.type));
+                objData.positionM   = obj.positionM;
+                objData.xformRot    = obj.xformRot;
+                objData.gdtfSpec    = obj.gdtfSpec;
+                objData.unitNumber  = obj.unitNumber;
+                objData.fixtureId   = obj.fixtureId;
+                objData.dmxAddress  = obj.dmxAddress;
+                objData.universe    = obj.universe;
+                objData.enabled     = obj.enabled;
+                objData.gdtfProfile = obj.gdtfProfile;
                 layerData.objects.append(objData);
             }
             data.layers.append(layerData);
         }
         project_.mvr.imports.append(data);
+        fixturesPanel_->setData(project_.mvr.imports, project_.trackers);
         markDirty();
     });
 
@@ -431,6 +459,41 @@ MainWindow::MainWindow(NdiReceiver* ndi,
         stagePropertiesPanel_->setSelectedObject(-999);
     });
 
+    connect(stageItemsPanel_, &StageItemsPanel::mvrFixtureSelected,
+            this, [this](int importIdx, int layerIdx, int objIdx) {
+        if (importIdx < 0 || importIdx >= project_.mvr.imports.size()) return;
+        stagePropertiesPanel_->setMvrFixture(importIdx, layerIdx, objIdx,
+                                             project_.mvr.imports[importIdx],
+                                             project_.trackers);
+    });
+
+    connect(stagePropertiesPanel_, &StagePropertiesPanel::mvrFixtureTrackerLinkChanged,
+            this, [this](int importIdx, int layerIdx, int objIdx, int trackerLink) {
+        if (importIdx < 0 || importIdx >= project_.mvr.imports.size()) return;
+        auto& imp = project_.mvr.imports[importIdx];
+        if (layerIdx < 0 || layerIdx >= imp.layers.size()) return;
+        auto& layer = imp.layers[layerIdx];
+        if (objIdx < 0 || objIdx >= layer.objects.size()) return;
+        layer.objects[objIdx].trackerLink = trackerLink;
+        fixturesPanel_->setData(project_.mvr.imports, project_.trackers);
+        markDirty();
+    });
+
+    connect(fixturesPanel_, &FixturesPanel::gdtfAssignRequested,
+            this, &MainWindow::onAssignGdtf);
+
+    connect(fixturesPanel_, &FixturesPanel::dmxAddressChanged, this,
+        [this](int importIdx, int layerIdx, int objIdx, int universe, int address) {
+            if (importIdx < 0 || importIdx >= project_.mvr.imports.size()) return;
+            auto& imp = project_.mvr.imports[importIdx];
+            if (layerIdx < 0 || layerIdx >= imp.layers.size()) return;
+            auto& layer = imp.layers[layerIdx];
+            if (objIdx < 0 || objIdx >= layer.objects.size()) return;
+            layer.objects[objIdx].universe   = universe;
+            layer.objects[objIdx].dmxAddress = address;
+            markDirty();
+        });
+
     // Stage3D panel: show MVR labels setting changed
     connect(stage3DPanel_, &Stage3DPanel::showMvrLabelsChanged,
             this, [this](bool show) {
@@ -514,6 +577,11 @@ MainWindow::MainWindow(NdiReceiver* ndi,
     statusBar()->addPermanentWidget(leaveSessionBtn_);
     statusBar()->addPermanentWidget(statusSession_);
 
+    auto* settingsBtn = new QPushButton("⚙ Project Settings");
+    settingsBtn->setFlat(true);
+    connect(settingsBtn, &QPushButton::clicked, settingsDialog_, &SettingsDialog::showModeTab);
+    statusBar()->addPermanentWidget(settingsBtn);
+
     // ── Save/Load progress bar ────────────────────────────────────────────
     saveLoadProgressBar_ = new QProgressBar;
     saveLoadProgressBar_->setMinimumWidth(150);
@@ -557,6 +625,7 @@ MainWindow::MainWindow(NdiReceiver* ndi,
                 else ++it;
             }
         }
+        fixturesPanel_->setData(project_.mvr.imports, project_.trackers);
         if (sessionMgr_->state() == SessionManager::State::Hosting ||
             (sessionMgr_->state() == SessionManager::State::Joined &&
              sessionMgr_->localRole() == SessionRole::Admin))
@@ -579,7 +648,7 @@ MainWindow::MainWindow(NdiReceiver* ndi,
         setDecklinkSource(id, conn, mode, b10);
     });
 
-    connect(networkPanel_, &NetworkSettingsPanel::configChanged,
+    connect(settingsDialog_, &SettingsDialog::networkConfigChanged,
             this, [this](const NetworkConfig& cfg) {
         project_.network = cfg;
         sessionPanel_->setSessionInterface(cfg.sessionInterface);
@@ -604,6 +673,18 @@ MainWindow::MainWindow(NdiReceiver* ndi,
             if (sacnCfg.enabled)
                 sacnReceiver_->startListening(sacnCfg);
         });
+        markDirty();
+    });
+    connect(settingsDialog_, &SettingsDialog::inputAdaptersChanged,
+            this, [this](const QList<InputAdapterConfig>& adapters) {
+        project_.inputAdapters = adapters;
+        reconfigureInputAdapters();
+        markDirty();
+    });
+    connect(settingsDialog_, &SettingsDialog::operatingModeChanged, this, [this](OperatingMode mode) {
+        project_.operatingMode = mode;
+        reconfigureDmxOutput();
+        stage3DDock_->setVisible(mode != OperatingMode::Camera2D);
         markDirty();
     });
 
@@ -807,6 +888,9 @@ MainWindow::MainWindow(NdiReceiver* ndi,
     connect(actOpen,   &QAction::triggered, this, &MainWindow::onOpenProject);
     connect(actSave,   &QAction::triggered, this, &MainWindow::onSaveProject);
     connect(actSaveAs, &QAction::triggered, this, &MainWindow::onSaveProjectAs);
+    fileMenu->addSeparator();
+    auto* actProjectSettings = fileMenu->addAction("Project &Settings…");
+    connect(actProjectSettings, &QAction::triggered, settingsDialog_, &SettingsDialog::showModeTab);
 
     fileMenu->addSeparator();
     actCloseProject_ = fileMenu->addAction("&Close Project");
@@ -855,6 +939,10 @@ MainWindow::MainWindow(NdiReceiver* ndi,
     auto* actExit = fileMenu->addAction("E&xit");
     connect(actExit, &QAction::triggered, qApp, &QApplication::quit);
 
+    auto* fixtureMenu = menuBar()->addMenu("Fi&xtures");
+    auto* actGdtfLib  = fixtureMenu->addAction("GDTF &Library…");
+    connect(actGdtfLib, &QAction::triggered, this, &MainWindow::openGdtfLibrary);
+
     auto* viewMenu = menuBar()->addMenu("&View");
     for (auto* d : panelDocks_)
         viewMenu->addAction(d->toggleViewAction());
@@ -863,6 +951,7 @@ MainWindow::MainWindow(NdiReceiver* ndi,
     viewMenu->addAction(stage3DDock_->toggleViewAction());
     viewMenu->addAction(stageItemsDock_->toggleViewAction());
     viewMenu->addAction(stagePropertiesDock_->toggleViewAction());
+    viewMenu->addAction(fixturesDock_->toggleViewAction());
     viewMenu->addSeparator();
     auto* actResetLayout = viewMenu->addAction("Reset Layout");
 
@@ -899,7 +988,8 @@ MainWindow::MainWindow(NdiReceiver* ndi,
         resizeDocks({videoDock_},   {1160}, Qt::Horizontal);
         resizeDocks({sessionDock_}, {280},  Qt::Horizontal);
         for (auto* d : panelDocks_) d->setVisible(true);
-        streamDock_->raise();
+        fixturesDock_->setVisible(true);
+        sessionDock_->raise();
     });
 
     // Restore window geometry now; dock state is deferred until workspace is shown.
@@ -929,8 +1019,7 @@ MainWindow::MainWindow(NdiReceiver* ndi,
 
     // Connect welcome screen actions
     connect(welcomeScreen_, &WelcomeScreen::newRequested, this, [this]() {
-        showWorkspace();
-        onNewProject();
+        onNewProject();  // handles showWorkspace() internally
     });
     connect(welcomeScreen_, &WelcomeScreen::openRequested, this, [this](const QString& path) {
         if (path.isEmpty()) {
@@ -943,9 +1032,14 @@ MainWindow::MainWindow(NdiReceiver* ndi,
     connect(welcomeScreen_, &WelcomeScreen::joinRequested,
             this, [this](const QString& peerName, const QString& iface, DiscoveredSession session) {
         showWorkspace();
-        onNewProject();
+        project_     = Project::defaultProject();
+        projectPath_ = QString();
+        calibration_ = Calibration{};
+        calibrationPanel_->reset();
+        video_->setCalibration(&calibration_);
         project_.network.sessionInterface = iface;
-        networkPanel_->setConfig(project_.network);
+        applyProject();
+        markSaved();
         sessionMgr_->joinSession(session.host, session.port, peerName);
     });
 
@@ -981,6 +1075,7 @@ void MainWindow::showWelcomeScreen()
     stage3DDock_->hide();
     stageItemsDock_->hide();
     stagePropertiesDock_->hide();
+    fixturesDock_->hide();
     for (auto* d : panelDocks_) d->hide();
 }
 
@@ -1006,6 +1101,7 @@ void MainWindow::showWorkspace()
     stage3DDock_->show();
     stageItemsDock_->show();
     stagePropertiesDock_->show();
+    fixturesDock_->show();
     for (auto* d : panelDocks_) d->show();
 }
 
@@ -1173,6 +1269,7 @@ void MainWindow::setWebcamSource(const QString& device) {
     videoSourceKind_ = VideoSourceKind::Webcam;
     videoSourceName_ = device;
     project_.videoSourceType = "webcam";
+    project_.webcamDevice    = device;
 
     // Stop NDI decoding to reduce CPU/network usage when using the webcam.
     ndi_->disconnectFromSource();
@@ -1248,9 +1345,13 @@ void MainWindow::applyProject() {
     updateWindowTitle();
     trackersPanel_->setTrackers(project_.trackers);
     trackerBar_->setTrackers(project_.trackers);
-    networkPanel_->setConfig(project_.network);
+    settingsDialog_->setNetworkConfig(project_.network);
+    settingsDialog_->setInputAdapters(project_.inputAdapters);
+    settingsDialog_->setOperatingMode(project_.operatingMode);
     sessionPanel_->setSessionInterface(project_.network.sessionInterface);
     psnSender_->configure(project_.network);
+    reconfigureDmxOutput();
+    reconfigureInputAdapters();
     if (kEnableIncomingPsn) {
         psnReceiver_->stop();
         psnReceiver_->wait();
@@ -1269,7 +1370,9 @@ void MainWindow::applyProject() {
                                                project_.decklinkConnection,
                                                project_.decklinkDisplayMode,
                                                project_.decklinkAllow10Bit);
-    } else if (project_.videoSourceType != "webcam") {
+    } else if (project_.videoSourceType == "webcam") {
+        setWebcamSource(project_.webcamDevice);
+    } else {
         video_->setNdiSourceConfigured(!project_.ndiSource.isEmpty());
         if (!project_.ndiSource.isEmpty())
             setNdiSource(project_.ndiSource);
@@ -1364,6 +1467,7 @@ void MainWindow::applyProject() {
     stageItemsPanel_->setMvrImports(mvrImports_);
     stage3DPanel_->setShowMvrLabels(project_.mvr.showLabels);
     stage3DPanel_->setMvrRenderMode(MvrRenderMode(int(project_.mvr.renderMode)));
+    fixturesPanel_->setData(project_.mvr.imports, project_.trackers);
 
     updateCalibStatus();
     applyingProject_ = false;
@@ -1425,11 +1529,21 @@ void MainWindow::onTimer() {
 
     video_->setOwnPositions(trackerPositions_, project_.trackers);
     video_->setOwnRawPositions(trackerRawPositions_);
+
     if (!trackerPositions_.isEmpty()) {
-        QMap<int, float> heights;
-        for (auto it = trackerPositions_.constBegin(); it != trackerPositions_.constEnd(); ++it)
-            heights[it.key()] = stageHeightAt(it.value().first, it.value().second) + clickPlaneHeight_;
-        psnSender_->sendPositions(trackerPositions_, project_.trackers, heights);
+        switch (project_.operatingMode) {
+        case OperatingMode::Stage3DPSN: {
+            QMap<int, float> heights;
+            for (auto it = trackerPositions_.constBegin(); it != trackerPositions_.constEnd(); ++it)
+                heights[it.key()] = stageHeightAt(it.value().first, it.value().second) + clickPlaneHeight_;
+            psnSender_->sendPositions(trackerPositions_, project_.trackers, heights);
+            break;
+        }
+        case OperatingMode::Stage3DDMX:
+        case OperatingMode::Camera2D:
+            sendDmxForMode();
+            break;
+        }
     }
     stage3DPanel_->setTrackerPositions(trackerPositions_, project_.trackers);
     frameCount_++;
@@ -1602,7 +1716,17 @@ void MainWindow::handleVideoFrame(const QImage& frame) {
 }
 
 void MainWindow::onNewProject() {
-    showWorkspace();
+    // If called from the welcome screen, showWorkspace() already ran.
+    // Run the wizard before showing the workspace if we're still on the welcome screen.
+    const bool wasActive = workspaceActive_;
+    if (!wasActive) showWorkspace();
+
+    NewProjectWizard wizard(this);
+    if (wizard.exec() != QDialog::Accepted) {
+        if (!wasActive) showWelcomeScreen();
+        return;
+    }
+
     project_     = Project::defaultProject();
     projectPath_ = QString();
     trackerPositions_.clear();
@@ -1610,6 +1734,10 @@ void MainWindow::onNewProject() {
     calibration_ = Calibration{};
     calibrationPanel_->reset();
     video_->setCalibration(&calibration_);
+
+    project_.operatingMode = wizard.selectedMode();
+    project_.trackers      = wizard.trackers();
+
     applyProject();
     markSaved();
 }
@@ -1856,4 +1984,279 @@ void MainWindow::syncAllStageObjects()
     // Video: user objects + calib rect boundary flag
     video_->setStageObjects(project_.stageObjects);
     video_->setCalibBoundaryVisible(project_.calibrationView.showCalibRectInVideo);
+}
+
+// ── DMX output routing ────────────────────────────────────────────────────────
+
+void MainWindow::reconfigureDmxOutput() {
+    dmxSender_->stop();
+    dmxReceiver_->stop();
+
+    const auto& cfg = project_.dmxOutput;
+    if (project_.operatingMode == OperatingMode::Stage3DPSN) return;
+
+    dmxSender_->configure(cfg.outputs);
+    if (cfg.outputMode == DmxOutputMode::Replacement)
+        dmxReceiver_->configure(cfg.inputs);
+}
+
+void MainWindow::reconfigureInputAdapters() {
+    for (auto* a : inputAdapters_) { a->stop(); a->deleteLater(); }
+    inputAdapters_.clear();
+
+    for (const auto& cfg : project_.inputAdapters) {
+        if (!cfg.enabled) continue;
+        InputAdapterBase* adapter = nullptr;
+        if (cfg.type == InputAdapterType::SacnArtNet)
+            adapter = new SacnArtNetInputAdapter(cfg, this);
+        else
+            adapter = new MidiInputAdapter(cfg, this);
+
+        connect(adapter, &InputAdapterBase::clickPlaneHeightChanged,
+                this, [this](float h) { applyPlaneHeight(h); });
+
+        inputAdapters_.append(adapter);
+        adapter->start();
+    }
+}
+
+void MainWindow::sendDmxForMode() {
+    QMap<quint16, QByteArray> frames;
+    QMap<QString, FixtureStatus> statusMap;
+    QList<FixtureRay> fixtureRays;
+
+    auto getFrame = [&](quint16 uni) -> QByteArray& {
+        auto it = frames.find(uni);
+        if (it == frames.end()) {
+            if (project_.dmxOutput.outputMode == DmxOutputMode::Replacement)
+                frames[uni] = dmxReceiver_->latestFrame(uni);
+            else
+                frames[uni] = QByteArray(512, '\0');
+        }
+        return frames[uni];
+    };
+
+    auto writeChannel = [](QByteArray& frame, int baseAddr, const GdtfChannelInfo& ch, quint16 val16) {
+        if (ch.address < 0) return;
+        const int coarse = baseAddr + ch.address - 1;
+        if (coarse >= 0 && coarse < 512)
+            frame[coarse] = char(val16 >> 8);
+        if (ch.is16bit) {
+            const int fine = baseAddr + ch.address2 - 1;
+            if (fine >= 0 && fine < 512)
+                frame[fine] = char(val16 & 0xFF);
+        }
+    };
+
+    if (project_.operatingMode == OperatingMode::Stage3DDMX) {
+        for (int ii = 0; ii < project_.mvr.imports.size(); ++ii) {
+            const auto& imp = project_.mvr.imports[ii];
+            if (!imp.enabled) continue;
+            for (int li = 0; li < imp.layers.size(); ++li) {
+                const auto& layer = imp.layers[li];
+                if (!layer.enabled) continue;
+                for (int oi = 0; oi < layer.objects.size(); ++oi) {
+                    const auto& obj = layer.objects[oi];
+                    if (!obj.enabled) continue;
+                    if (obj.type != MvrObjectData::Type::Fixture) continue;
+                    if (obj.trackerLink < 0) continue;
+                    if (!trackerPositions_.contains(obj.trackerLink)) continue;
+
+                    // Apply import offset+rotation to get world-space fixture position
+                    QMatrix4x4 importModel;
+                    importModel.translate(imp.offsetX, imp.offsetY, imp.offsetZ);
+                    if (imp.rotDeg != 0.f) importModel.rotate(imp.rotDeg, 0, 1, 0);
+                    const QVector3D fixturePos = importModel.map(obj.positionM);
+
+                    const auto& pos = trackerPositions_[obj.trackerLink];
+                    const float targetY = stageHeightAt(pos.first, pos.second) + clickPlaneHeight_;
+                    const QVector3D target(pos.first, targetY, pos.second);
+
+                    // Combined world-from-fixture rotation: import rotation applied on top of fixture's MVR rotation.
+                    QMatrix4x4 importRot;
+                    importRot.rotate(imp.rotDeg, 0, 1, 0);
+                    const QMatrix4x4 fixtureRot = importRot * obj.xformRot;
+
+                    // Transform target direction into fixture-local space to compute pan/tilt.
+                    // Moving-head convention: beam at rest = local -Y (straight down); pan=0/tilt=0.
+                    const QVector3D v_world = target - fixturePos;
+                    const QVector3D v_local = fixtureRot.inverted().mapVector(v_world);
+                    const float horizDist = std::sqrt(v_local.x() * v_local.x() + v_local.z() * v_local.z());
+                    const float tiltDeg = qRadiansToDegrees(std::atan2(horizDist, -v_local.y()));
+                    const float panDeg  = qRadiansToDegrees(std::atan2(-v_local.x(), -v_local.z()));
+
+                    const QString key = QString("%1-%2-%3").arg(ii).arg(li).arg(oi);
+                    FixtureStatus& st = statusMap[key];
+                    st.active  = true;
+                    st.panDeg  = panDeg;
+                    st.tiltDeg = tiltDeg;
+
+                    // Reconstruct beam direction from pan/tilt so the ray exactly matches what is sent
+                    // to the fixture — any angle error will be visible in the 3D view.
+                    {
+                        const float tiltRad = qDegreesToRadians(tiltDeg);
+                        const float panRad  = qDegreesToRadians(panDeg);
+                        // Beam in fixture-local space (pan then tilt on a downward-pointing head).
+                        const QVector3D d_local(-std::sin(panRad) * std::sin(tiltRad),
+                                                 -std::cos(tiltRad),
+                                                 -std::cos(panRad) * std::sin(tiltRad));
+                        FixtureRay fr;
+                        fr.origin    = fixturePos;
+                        fr.direction = fixtureRot.mapVector(d_local).normalized();
+                        for (const auto& tc : project_.trackers)
+                            if (tc.id == obj.trackerLink) { fr.color = tc.color; break; }
+                        if (!fr.color.isValid()) fr.color = Qt::white;
+                        fixtureRays.append(fr);
+                    }
+
+                    // Compute DMX values for display and output (GDTF profile required)
+                    if (!obj.gdtfProfile.valid) continue;
+                    const PanTiltDmx pt = PanTiltCalculator::calculate(
+                        fixturePos, target, obj.gdtfProfile, fixtureRot);
+                    if (!pt.valid) continue;
+                    st.panDmx  = pt.pan;
+                    st.tiltDmx = pt.tilt;
+
+                    if (project_.dmxOutput.outputs.isEmpty()) continue;
+                    QByteArray& frame = getFrame(quint16(obj.universe));
+                    if (frame.size() < 512) frame.resize(512, '\0');
+                    const int baseAddr = obj.dmxAddress - 1;
+                    writeChannel(frame, baseAddr, obj.gdtfProfile.pan,  pt.pan);
+                    writeChannel(frame, baseAddr, obj.gdtfProfile.tilt, pt.tilt);
+                }
+            }
+        }
+    } else if (project_.operatingMode == OperatingMode::Camera2D) {
+        if (project_.camera2DCalib.valid) {
+            for (int ii = 0; ii < project_.mvr.imports.size(); ++ii) {
+                const auto& imp = project_.mvr.imports[ii];
+                if (!imp.enabled) continue;
+                for (int li = 0; li < imp.layers.size(); ++li) {
+                    const auto& layer = imp.layers[li];
+                    if (!layer.enabled) continue;
+                    for (int oi = 0; oi < layer.objects.size(); ++oi) {
+                        const auto& obj = layer.objects[oi];
+                        if (!obj.enabled) continue;
+                        if (obj.type != MvrObjectData::Type::Fixture) continue;
+                        if (obj.trackerLink < 0) continue;
+                        if (!trackerPositions_.contains(obj.trackerLink)) continue;
+
+                        const auto& rawPos = trackerRawPositions_[obj.trackerLink];
+                        const QPointF panTilt = Calibration::pixelToPanTilt(
+                            project_.camera2DCalib,
+                            QPointF(rawPos.first, rawPos.second));
+                        if (panTilt.x() < 0) continue;
+
+                        const quint16 panVal  = quint16(qBound(0.0, panTilt.x(), 65535.0));
+                        const quint16 tiltVal = quint16(qBound(0.0, panTilt.y(), 65535.0));
+
+                        const QString key = QString("%1-%2-%3").arg(ii).arg(li).arg(oi);
+                        FixtureStatus& st = statusMap[key];
+                        st.active  = true;
+                        st.panDmx  = panVal;
+                        st.tiltDmx = tiltVal;
+
+                        if (project_.dmxOutput.outputs.isEmpty()) continue;
+                        QByteArray& frame = getFrame(quint16(obj.universe));
+                        if (frame.size() < 512) frame.resize(512, '\0');
+                        const int baseAddr = obj.dmxAddress - 1;
+                        writeChannel(frame, baseAddr, obj.gdtfProfile.pan,  panVal);
+                        writeChannel(frame, baseAddr, obj.gdtfProfile.tilt, tiltVal);
+                    }
+                }
+            }
+        }
+    }
+
+    fixturesPanel_->updateStatus(statusMap);
+    stage3DPanel_->setFixtureRays(fixtureRays);
+
+    if (!project_.dmxOutput.outputs.isEmpty()) {
+        for (auto it = frames.constBegin(); it != frames.constEnd(); ++it)
+            dmxSender_->sendFrame(it.key(), it.value());
+    }
+}
+
+void MainWindow::openGdtfLibrary()
+{
+    if (!gdtfLibraryDialog_) {
+        gdtfLibraryDialog_ = new GdtfLibraryDialog(false, {}, this);
+        gdtfLibraryDialog_->setAttribute(Qt::WA_DeleteOnClose);
+        connect(gdtfLibraryDialog_, &QDialog::destroyed, this,
+                [this]() { gdtfLibraryDialog_ = nullptr; });
+    }
+    gdtfLibraryDialog_->show();
+    gdtfLibraryDialog_->raise();
+    gdtfLibraryDialog_->activateWindow();
+}
+
+void MainWindow::onAssignGdtf(int importIdx, int layerIdx, int objIdx)
+{
+    if (importIdx < 0 || importIdx >= project_.mvr.imports.size()) return;
+    auto& imp = project_.mvr.imports[importIdx];
+    if (layerIdx < 0 || layerIdx >= imp.layers.size()) return;
+    auto& layer = imp.layers[layerIdx];
+    if (objIdx < 0 || objIdx >= layer.objects.size()) return;
+    const auto& obj = layer.objects[objIdx];
+
+    GdtfLibraryDialog dlg(true, project_.mvr.imports, this);
+    dlg.preselectEntry(obj.gdtfSpec, obj.gdtfProfile.modeName);
+    if (dlg.exec() != QDialog::Accepted) return;
+
+    const QString gdtfPath = dlg.selectedGdtfPath();
+    if (gdtfPath.isEmpty()) return;
+
+    const GdtfDmxProfile profile = GdtfLibrary::loadProfile(gdtfPath, dlg.selectedModeName());
+    if (!profile.valid) {
+        QMessageBox::warning(this, "Invalid GDTF",
+            "Could not read the GDTF file.");
+        return;
+    }
+
+    // Ask whether to assign to all fixtures of the same type
+    const QString gdtfSpec = obj.gdtfSpec;
+    int sameTypeCount = 0;
+    if (!gdtfSpec.isEmpty()) {
+        for (const auto& i2 : project_.mvr.imports)
+            for (const auto& l2 : i2.layers)
+                for (const auto& o2 : l2.objects)
+                    if (o2.type == MvrObjectData::Type::Fixture
+                            && o2.gdtfSpec == gdtfSpec)
+                        ++sameTypeCount;
+    }
+
+    bool assignAll = false;
+    if (sameTypeCount > 1) {
+        auto* msgBox = new QMessageBox(this);
+        msgBox->setWindowTitle("Assign GDTF");
+        msgBox->setText(QString("Assign the GDTF profile to:"));
+        msgBox->setInformativeText(
+            QString("%1 fixture \"%2\" only, or all %3 unassigned \"%2\" fixtures?")
+                .arg(1).arg(gdtfSpec).arg(sameTypeCount));
+        auto* btnThis = msgBox->addButton("Just This Fixture", QMessageBox::AcceptRole);
+        auto* btnAll  = msgBox->addButton(
+            QString("All %1 Fixtures").arg(sameTypeCount), QMessageBox::AcceptRole);
+        msgBox->addButton(QMessageBox::Cancel);
+        msgBox->exec();
+        if (msgBox->clickedButton() == btnAll)  assignAll = true;
+        else if (msgBox->clickedButton() != btnThis) return;
+    }
+
+    // Apply profile — use explicit indices to avoid pointer-comparison issues
+    const QString newGdtfSpec = QFileInfo(gdtfPath).fileName();
+    for (int ii = 0; ii < project_.mvr.imports.size(); ++ii)
+        for (int li = 0; li < project_.mvr.imports[ii].layers.size(); ++li)
+            for (int oi = 0; oi < project_.mvr.imports[ii].layers[li].objects.size(); ++oi) {
+                auto& o2 = project_.mvr.imports[ii].layers[li].objects[oi];
+                if (o2.type != MvrObjectData::Type::Fixture) continue;
+                const bool isThis = (ii == importIdx && li == layerIdx && oi == objIdx);
+                const bool matchType = !gdtfSpec.isEmpty() && o2.gdtfSpec == gdtfSpec;
+                if (isThis || (assignAll && matchType)) {
+                    o2.gdtfProfile = profile;
+                    o2.gdtfSpec    = newGdtfSpec;
+                }
+            }
+
+    fixturesPanel_->setData(project_.mvr.imports, project_.trackers);
+    markDirty();
 }

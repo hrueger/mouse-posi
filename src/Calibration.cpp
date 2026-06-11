@@ -273,3 +273,48 @@ QVector3D Calibration::computeCameraFromFov(
         float(camCenter.at<double>(1)),
         float(camCenter.at<double>(2)));
 }
+
+// ── Camera 2D calibration (pixel → pan/tilt DMX) ─────────────────────────────
+
+double Calibration::computeCamera2D(Camera2DCalibration& calib) {
+    if (calib.points.size() < 4) return -1.0;
+
+    std::vector<cv::Point2f> src, dst;
+    for (const auto& p : calib.points) {
+        src.emplace_back(float(p.pixel.x()), float(p.pixel.y()));
+        dst.emplace_back(p.panDmx, p.tiltDmx);
+    }
+
+    cv::Mat H = cv::findHomography(src, dst, cv::RANSAC, 3.0);
+    if (H.empty()) { calib.valid = false; return -1.0; }
+
+    calib.homography.clear();
+    const double* d = reinterpret_cast<const double*>(H.data);
+    for (int i = 0; i < 9; ++i) calib.homography << d[i];
+    calib.valid = true;
+
+    // Compute mean reprojection error
+    double err = 0.0;
+    for (const auto& p : calib.points) {
+        const cv::Mat pt = (cv::Mat_<double>(3,1) << p.pixel.x(), p.pixel.y(), 1.0);
+        const cv::Mat res = H * pt;
+        const double px = res.at<double>(0) / res.at<double>(2);
+        const double py = res.at<double>(1) / res.at<double>(2);
+        err += std::sqrt((px - p.panDmx)*(px - p.panDmx) + (py - p.tiltDmx)*(py - p.tiltDmx));
+    }
+    return err / calib.points.size();
+}
+
+QPointF Calibration::pixelToPanTilt(const Camera2DCalibration& calib, QPointF pixel) {
+    if (!calib.valid || calib.homography.size() != 9) return QPointF(-1, -1);
+
+    cv::Mat H(3, 3, CV_64F);
+    double* d = reinterpret_cast<double*>(H.data);
+    for (int i = 0; i < 9; ++i) d[i] = calib.homography[i];
+
+    const cv::Mat pt = (cv::Mat_<double>(3,1) << pixel.x(), pixel.y(), 1.0);
+    const cv::Mat res = H * pt;
+    const double w = res.at<double>(2);
+    if (std::abs(w) < 1e-9) return QPointF(-1, -1);
+    return QPointF(res.at<double>(0) / w, res.at<double>(1) / w);
+}

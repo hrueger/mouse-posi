@@ -5,6 +5,7 @@
 #include <QList>
 #include <QVector>
 #include <QColor>
+#include "Project.h"
 
 // ─── Legacy fixture-only structure (kept for old callers) ─────────────────────
 
@@ -29,13 +30,17 @@ struct MvrObject {
     enum class Type { Fixture, SceneObject, Truss, Group, Unknown };
 
     QString          name;
-    Type             type      = Type::Unknown;
+    Type             type        = Type::Unknown;
     QVector<MvrMesh> meshes;
-    QVector3D        positionM;  // centre in metres, view space (fixtures/groups)
+    QVector3D        positionM;
+    QMatrix4x4       xformRot;          // rotation part of MVR transform (no translation)
     QString          gdtfSpec;
-    int              unitNumber = 0;
-    int              dmxAddress = 0;
-    bool             enabled    = true;
+    int              unitNumber  = 0;
+    QString          fixtureId;
+    int              dmxAddress  = 0;
+    int              universe    = 1;
+    bool             enabled     = true;
+    GdtfDmxProfile   gdtfProfile;
 };
 
 struct MvrLayer {
@@ -75,4 +80,8 @@ public:
     };
     static ParseResult parse(const QString& filePath);
     static ParseResult parseFromData(const QByteArray& data); // write to temp file, then parse
+
+    // Load 3D meshes directly from a standalone GDTF file (no MVR scene context)
+    static QVector<MvrMesh> loadGdtfMeshes(const QString& gdtfPath);
+    static QVector<MvrMesh> loadGdtfMeshesFromData(const QByteArray& gdtfData);
 };

@@ -4,6 +4,7 @@
 #include <QVector3D>
 #include <QSize>
 #include <opencv2/core.hpp>
+#include "Project.h"
 
 class Calibration {
 public:
@@ -55,6 +56,17 @@ public:
         const QList<QPointF>& imagePoints,
         const QList<QPointF>& stagePoints,
         float fovHDeg, QSize imageSize);
+
+    // ── Camera 2D calibration (pixel → pan/tilt DMX space) ──────────────────
+
+    // Compute a homography from pixel coordinates to pan/tilt DMX values
+    // using ≥4 control points. Returns mean reprojection error, -1 on failure.
+    // Stores result into `calib.homography` and sets `calib.valid`.
+    static double computeCamera2D(Camera2DCalibration& calib);
+
+    // Apply a previously-computed Camera2DCalibration homography.
+    // Returns (panDmx, tiltDmx) or (-1,-1) on invalid calib.
+    static QPointF pixelToPanTilt(const Camera2DCalibration& calib, QPointF pixel);
 
 private:
     cv::Mat    H_;      // 3×3 floor homography  (image → stage XZ)

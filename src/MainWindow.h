@@ -28,6 +28,9 @@ class DeckLinkCapture;
 class PsnSender;
 class PsnReceiver;
 class SacnReceiver;
+class DmxSender;
+class DmxReceiver;
+class InputAdapterBase;
 class SessionManager;
 class TrackersPanel;
 class TrackerBar;
@@ -40,6 +43,9 @@ class Stage3DPanel;
 class StageItemsPanel;
 class StagePropertiesPanel;
 class WelcomeScreen;
+class SettingsDialog;
+class FixturesPanel;
+class GdtfLibraryDialog;
 namespace oclero { namespace qlementine { class ThemeManager; } }
 
 class MainWindow : public QMainWindow {
@@ -106,28 +112,36 @@ private:
     void showWorkspace();
     void openRecentProject(const QString& path);
 
+    void reconfigureDmxOutput();
+    void reconfigureInputAdapters();
+    void sendDmxForMode();
+
+    void openGdtfLibrary();
+    void onAssignGdtf(int importIdx, int layerIdx, int objIdx);
+
     VideoWidget*          video_;
     TrackersPanel*        trackersPanel_;
     TrackerBar*           trackerBar_;
     StreamSourcePanel*    streamPanel_;
-    NetworkSettingsPanel* networkPanel_;
     StatsPanel*           statsPanel_;
     CalibrationPanel*     calibrationPanel_;
     SessionPanel*         sessionPanel_;
     Stage3DPanel*            stage3DPanel_;
     StageItemsPanel*         stageItemsPanel_;
     StagePropertiesPanel*    stagePropertiesPanel_;
+    FixturesPanel*           fixturesPanel_;
+    SettingsDialog*          settingsDialog_;
+    GdtfLibraryDialog*       gdtfLibraryDialog_ = nullptr;
 
     QDockWidget* videoDock_;
     QDockWidget* sessionDock_;
-    QDockWidget* streamDock_;
     QDockWidget* calibrationDock_;
     QDockWidget* trackersDock_;
-    QDockWidget* networkDock_;
     QDockWidget* statsDock_;
     QDockWidget* stage3DDock_;
     QDockWidget* stageItemsDock_;
     QDockWidget* stagePropertiesDock_;
+    QDockWidget* fixturesDock_;
     QList<QDockWidget*> panelDocks_;
 
     NdiReceiver*  ndi_;
@@ -137,6 +151,9 @@ private:
     PsnReceiver*  psnReceiver_;
     SacnReceiver* sacnReceiver_;
     QThread*      sacnThread_  = nullptr;
+    DmxSender*    dmxSender_   = nullptr;
+    DmxReceiver*  dmxReceiver_ = nullptr;
+    QList<InputAdapterBase*> inputAdapters_;
     SessionManager* sessionMgr_;
     QTimer        timer_;
     QTimer        statsTimer_;

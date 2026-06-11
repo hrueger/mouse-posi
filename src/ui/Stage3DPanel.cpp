@@ -43,6 +43,11 @@ Stage3DPanel::Stage3DPanel(QWidget* parent) : QWidget(parent)
         emit showMvrLabelsChanged(show);
     });
 
+    auto* showRaysAct = viewSettingsMenu->addAction(QStringLiteral("Show Rays"));
+    showRaysAct->setCheckable(true);
+    showRaysAct->setChecked(false);
+    connect(showRaysAct, &QAction::toggled, view_, &Stage3DView::setShowRays);
+
     viewSettingsMenu->addSeparator();
     viewSettingsMenu->addAction(QStringLiteral("Render Mode"))->setEnabled(false);
 
@@ -203,4 +208,14 @@ void Stage3DPanel::setCalibRectVisible(bool visible)
 void Stage3DPanel::setCameraMarker(QVector3D pos, float fovDeg, bool visible)
 {
     view_->setCameraMarker(pos, fovDeg, visible);
+}
+
+void Stage3DPanel::setFixtureRays(const QList<FixtureRay>& rays)
+{
+    view_->setFixtureRays(rays);
+}
+
+void Stage3DPanel::setShowRays(bool on)
+{
+    view_->setShowRays(on);
 }

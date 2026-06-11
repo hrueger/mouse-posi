@@ -63,6 +63,16 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(libmvrgdtf)
 
+# ── RtMidi (MIDI input support) ───────────────────────────────────────────────
+set(RTMIDI_BUILD_TESTING  OFF CACHE BOOL "" FORCE)
+set(RTMIDI_API_JACK       OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(
+    rtmidi
+    GIT_REPOSITORY https://github.com/thestk/rtmidi.git
+    GIT_TAG        6.0.0
+    GIT_SHALLOW    TRUE
+)
+FetchContent_MakeAvailable(rtmidi)
 
 set(SOURCES
     src/resources.qrc
@@ -77,6 +87,11 @@ set(SOURCES
     src/PsnSender.cpp
     src/PsnReceiver.cpp
     src/SacnReceiver.cpp
+    src/DmxSender.cpp
+    src/DmxReceiver.cpp
+    src/PanTiltCalculator.cpp
+    src/adapters/SacnArtNetInputAdapter.cpp
+    src/adapters/MidiInputAdapter.cpp
     src/Calibration.cpp
     src/Project.cpp
     src/ProjectWorker.cpp
@@ -96,6 +111,16 @@ set(SOURCES
     src/ui/MvrImportDialog.cpp
     src/ui/StagePropertiesPanel.cpp
     src/ui/WelcomeScreen.cpp
+    src/ui/InputAdaptersPanel.cpp
+    src/ui/ModeSelectionWidget.cpp
+    src/ui/SettingsDialog.cpp
+    src/ui/FixturesPanel.cpp
+    src/ui/DmxAddrEdit.cpp
+    src/ui/GdtfLibraryDialog.cpp
+    src/ui/GdtfShareDialog.cpp
+    src/ui/GdtfMeshPreview.cpp
+    src/ui/NewProjectWizard.cpp
+    src/GdtfLibrary.cpp
     # Session management
     src/SessionManager.cpp
 )
@@ -110,6 +135,12 @@ set(HEADERS
     src/PsnSender.h
     src/PsnReceiver.h
     src/SacnReceiver.h
+    src/DmxSender.h
+    src/DmxReceiver.h
+    src/PanTiltCalculator.h
+    src/adapters/InputAdapterBase.h
+    src/adapters/SacnArtNetInputAdapter.h
+    src/adapters/MidiInputAdapter.h
     src/Calibration.h
     src/Project.h
     src/ProjectWorker.h
@@ -129,6 +160,15 @@ set(HEADERS
     src/ui/MvrImportDialog.h
     src/ui/StagePropertiesPanel.h
     src/ui/WelcomeScreen.h
+    src/ui/ModeSelectionWidget.h
+    src/ui/SettingsDialog.h
+    src/ui/FixturesPanel.h
+    src/ui/DmxAddrEdit.h
+    src/ui/GdtfLibraryDialog.h
+    src/ui/GdtfShareDialog.h
+    src/ui/GdtfMeshPreview.h
+    src/ui/NewProjectWizard.h
+    src/GdtfLibrary.h
     src/SessionManager.h
 )
 
@@ -246,6 +286,7 @@ target_link_libraries(onpoint PRIVATE
     ${LibArchive_LIBRARY}
     qlementine
     MvrGdtf
+    rtmidi
 )
 
 target_compile_definitions(onpoint PRIVATE WEBCAM_AVAILABLE=1)

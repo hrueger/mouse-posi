@@ -54,29 +54,89 @@ static QList<QPointF> jsonToPointList(const QJsonArray& arr) {
 
 // ─── MVR Serialization (metadata only, no mesh geometry) ─────────────────────
 
+static QJsonObject gdtfChannelInfoToJson(const GdtfChannelInfo& c) {
+    QJsonObject o;
+    o["address"]  = c.address;
+    o["address2"] = c.address2;
+    o["is16bit"]  = c.is16bit;
+    o["minDeg"]   = double(c.minDeg);
+    o["maxDeg"]   = double(c.maxDeg);
+    return o;
+}
+
+static GdtfChannelInfo jsonToGdtfChannelInfo(const QJsonObject& o) {
+    GdtfChannelInfo c;
+    c.address  = o["address"].toInt(-1);
+    c.address2 = o["address2"].toInt(-1);
+    c.is16bit  = o["is16bit"].toBool(false);
+    c.minDeg   = float(o["minDeg"].toDouble(-270.0));
+    c.maxDeg   = float(o["maxDeg"].toDouble(270.0));
+    return c;
+}
+
 static QJsonObject mvrObjectToJson(const MvrObjectData& obj) {
     QJsonObject json;
-    json["name"] = obj.name;
-    json["type"] = int(obj.type);
-    json["position"] = QJsonArray{obj.positionM.x(), obj.positionM.y(), obj.positionM.z()};
-    json["gdtfSpec"] = obj.gdtfSpec;
-    json["unitNumber"] = obj.unitNumber;
-    json["dmxAddress"] = obj.dmxAddress;
-    json["enabled"] = obj.enabled;
+    json["name"]        = obj.name;
+    json["type"]        = int(obj.type);
+    json["position"]    = QJsonArray{obj.positionM.x(), obj.positionM.y(), obj.positionM.z()};
+    {
+        const QMatrix4x4& m = obj.xformRot;
+        json["rot"] = QJsonArray{
+            m(0,0), m(0,1), m(0,2),
+            m(1,0), m(1,1), m(1,2),
+            m(2,0), m(2,1), m(2,2)
+        };
+    }
+    json["gdtfSpec"]    = obj.gdtfSpec;
+    json["unitNumber"]  = obj.unitNumber;
+    if (!obj.fixtureId.isEmpty())
+        json["fixtureId"] = obj.fixtureId;
+    json["dmxAddress"]  = obj.dmxAddress;
+    json["universe"]    = obj.universe;
+    json["enabled"]     = obj.enabled;
+    json["trackerLink"] = obj.trackerLink;
+    if (obj.gdtfProfile.valid) {
+        QJsonObject profile;
+        profile["pan"]       = gdtfChannelInfoToJson(obj.gdtfProfile.pan);
+        profile["tilt"]      = gdtfChannelInfoToJson(obj.gdtfProfile.tilt);
+        profile["footprint"] = obj.gdtfProfile.footprint;
+        if (!obj.gdtfProfile.modeName.isEmpty())
+            profile["modeName"] = obj.gdtfProfile.modeName;
+        json["gdtfProfile"] = profile;
+    }
     return json;
 }
 
 static MvrObjectData jsonToMvrObject(const QJsonObject& json) {
     MvrObjectData obj;
-    obj.name = json["name"].toString();
-    obj.type = MvrObjectData::Type(json["type"].toInt(int(MvrObjectData::Type::Unknown)));
-    QJsonArray pos = json["position"].toArray();
+    obj.name        = json["name"].toString();
+    obj.type        = MvrObjectData::Type(json["type"].toInt(int(MvrObjectData::Type::Unknown)));
+    QJsonArray pos  = json["position"].toArray();
     if (pos.size() >= 3)
         obj.positionM = QVector3D(pos[0].toDouble(), pos[1].toDouble(), pos[2].toDouble());
-    obj.gdtfSpec = json["gdtfSpec"].toString();
-    obj.unitNumber = json["unitNumber"].toInt();
-    obj.dmxAddress = json["dmxAddress"].toInt();
-    obj.enabled = json["enabled"].toBool(true);
+    if (json.contains("rot")) {
+        const QJsonArray r = json["rot"].toArray();
+        if (r.size() == 9) {
+            obj.xformRot(0,0) = float(r[0].toDouble()); obj.xformRot(0,1) = float(r[1].toDouble()); obj.xformRot(0,2) = float(r[2].toDouble());
+            obj.xformRot(1,0) = float(r[3].toDouble()); obj.xformRot(1,1) = float(r[4].toDouble()); obj.xformRot(1,2) = float(r[5].toDouble());
+            obj.xformRot(2,0) = float(r[6].toDouble()); obj.xformRot(2,1) = float(r[7].toDouble()); obj.xformRot(2,2) = float(r[8].toDouble());
+        }
+    }
+    obj.gdtfSpec    = json["gdtfSpec"].toString();
+    obj.unitNumber  = json["unitNumber"].toInt();
+    obj.fixtureId   = json["fixtureId"].toString();
+    obj.dmxAddress  = json["dmxAddress"].toInt();
+    obj.universe    = json["universe"].toInt(1);
+    obj.enabled     = json["enabled"].toBool(true);
+    obj.trackerLink = json["trackerLink"].toInt(-1);
+    if (json.contains("gdtfProfile")) {
+        QJsonObject profile = json["gdtfProfile"].toObject();
+        obj.gdtfProfile.pan       = jsonToGdtfChannelInfo(profile["pan"].toObject());
+        obj.gdtfProfile.tilt      = jsonToGdtfChannelInfo(profile["tilt"].toObject());
+        obj.gdtfProfile.footprint = profile["footprint"].toInt(0);
+        obj.gdtfProfile.modeName  = profile["modeName"].toString();
+        obj.gdtfProfile.valid     = true;
+    }
     return obj;
 }
 
@@ -127,6 +187,169 @@ static MvrImportData jsonToMvrImport(const QJsonObject& json) {
     for (const auto& v : json["layers"].toArray())
         import.layers.append(jsonToMvrLayer(v.toObject()));
     return import;
+}
+
+// ─── DMX / Input adapter serialization ───────────────────────────────────────
+
+static QString dmxProtocolToString(DmxProtocol p) {
+    return p == DmxProtocol::ArtNet ? QStringLiteral("artnet") : QStringLiteral("sacn");
+}
+static DmxProtocol stringToDmxProtocol(const QString& s) {
+    return s == QStringLiteral("artnet") ? DmxProtocol::ArtNet : DmxProtocol::SACN;
+}
+
+static QString dmxNetModeToString(DmxNetworkMode m) {
+    switch (m) {
+    case DmxNetworkMode::Unicast:   return QStringLiteral("unicast");
+    case DmxNetworkMode::Broadcast: return QStringLiteral("broadcast");
+    default:                        return QStringLiteral("multicast");
+    }
+}
+static DmxNetworkMode stringToDmxNetMode(const QString& s) {
+    if (s == QStringLiteral("unicast"))   return DmxNetworkMode::Unicast;
+    if (s == QStringLiteral("broadcast")) return DmxNetworkMode::Broadcast;
+    return DmxNetworkMode::Multicast;
+}
+
+static QJsonObject dmxUniverseConfigToJson(const DmxUniverseConfig& c) {
+    QJsonObject o;
+    o["universe"]  = c.universe;
+    o["protocol"]  = dmxProtocolToString(c.protocol);
+    o["netMode"]   = dmxNetModeToString(c.netMode);
+    o["iface"]     = c.iface;
+    o["unicastIp"] = c.unicastIp;
+    return o;
+}
+static DmxUniverseConfig jsonToDmxUniverseConfig(const QJsonObject& o) {
+    DmxUniverseConfig c;
+    c.universe  = static_cast<quint16>(o["universe"].toInt(1));
+    c.protocol  = stringToDmxProtocol(o["protocol"].toString());
+    c.netMode   = stringToDmxNetMode(o["netMode"].toString());
+    c.iface     = o["iface"].toString();
+    c.unicastIp = o["unicastIp"].toString();
+    return c;
+}
+
+static QJsonObject dmxOutputConfigToJson(const DmxOutputConfig& cfg) {
+    QJsonObject o;
+    o["outputMode"] = cfg.outputMode == DmxOutputMode::Replacement
+                      ? QStringLiteral("replacement") : QStringLiteral("panTiltOnly");
+    QJsonArray outs, ins;
+    for (const auto& u : cfg.outputs) outs.append(dmxUniverseConfigToJson(u));
+    for (const auto& u : cfg.inputs)  ins.append(dmxUniverseConfigToJson(u));
+    o["outputs"] = outs;
+    o["inputs"]  = ins;
+    return o;
+}
+static DmxOutputConfig jsonToDmxOutputConfig(const QJsonObject& o) {
+    DmxOutputConfig cfg;
+    cfg.outputMode = o["outputMode"].toString() == QStringLiteral("replacement")
+                     ? DmxOutputMode::Replacement : DmxOutputMode::PanTiltOnly;
+    for (const auto& v : o["outputs"].toArray())
+        cfg.outputs.append(jsonToDmxUniverseConfig(v.toObject()));
+    for (const auto& v : o["inputs"].toArray())
+        cfg.inputs.append(jsonToDmxUniverseConfig(v.toObject()));
+    return cfg;
+}
+
+static QJsonObject camera2DCalibPointToJson(const Camera2DCalibPoint& p) {
+    return QJsonObject{
+        {"px", p.pixel.x()}, {"py", p.pixel.y()},
+        {"panDmx", double(p.panDmx)}, {"tiltDmx", double(p.tiltDmx)}
+    };
+}
+static Camera2DCalibPoint jsonToCamera2DCalibPoint(const QJsonObject& o) {
+    Camera2DCalibPoint p;
+    p.pixel   = QPointF(o["px"].toDouble(), o["py"].toDouble());
+    p.panDmx  = float(o["panDmx"].toDouble());
+    p.tiltDmx = float(o["tiltDmx"].toDouble());
+    return p;
+}
+
+static QJsonObject camera2DCalibToJson(const Camera2DCalibration& c) {
+    QJsonObject o;
+    QJsonArray pts, hom;
+    for (const auto& p : c.points) pts.append(camera2DCalibPointToJson(p));
+    for (double v : c.homography) hom.append(v);
+    o["points"]    = pts;
+    o["homography"] = hom;
+    o["valid"]     = c.valid;
+    return o;
+}
+static Camera2DCalibration jsonToCamera2DCalib(const QJsonObject& o) {
+    Camera2DCalibration c;
+    for (const auto& v : o["points"].toArray())
+        c.points.append(jsonToCamera2DCalibPoint(v.toObject()));
+    for (const auto& v : o["homography"].toArray())
+        c.homography.append(v.toDouble());
+    c.valid = o["valid"].toBool(false);
+    return c;
+}
+
+static QJsonObject inputAdapterMappingToJson(const InputAdapterMapping& m) {
+    QJsonObject o;
+    o["target"]      = m.target;
+    o["universe"]    = m.universe;
+    o["channel"]     = m.channel;
+    o["minValue"]    = double(m.minValue);
+    o["maxValue"]    = double(m.maxValue);
+    o["midiPort"]    = m.midiPort;
+    o["midiCC"]      = m.midiCC;
+    o["midiChannel"] = m.midiChannel;
+    return o;
+}
+static InputAdapterMapping jsonToInputAdapterMapping(const QJsonObject& o) {
+    InputAdapterMapping m;
+    m.target      = o["target"].toString();
+    m.universe    = static_cast<quint16>(o["universe"].toInt(1));
+    m.channel     = static_cast<quint16>(o["channel"].toInt(1));
+    m.minValue    = float(o["minValue"].toDouble(0.0));
+    m.maxValue    = float(o["maxValue"].toDouble(10.0));
+    m.midiPort    = o["midiPort"].toString();
+    m.midiCC      = o["midiCC"].toInt(-1);
+    m.midiChannel = o["midiChannel"].toInt(1);
+    return m;
+}
+
+static QJsonObject inputAdapterConfigToJson(const InputAdapterConfig& cfg) {
+    QJsonObject o;
+    o["type"]     = cfg.type == InputAdapterType::Midi
+                    ? QStringLiteral("midi") : QStringLiteral("sacnartnet");
+    o["protocol"] = dmxProtocolToString(cfg.protocol);
+    o["netMode"]  = dmxNetModeToString(cfg.netMode);
+    o["iface"]    = cfg.iface;
+    o["unicastIp"]= cfg.unicastIp;
+    o["enabled"]  = cfg.enabled;
+    QJsonArray mappings;
+    for (const auto& m : cfg.mappings) mappings.append(inputAdapterMappingToJson(m));
+    o["mappings"] = mappings;
+    return o;
+}
+static InputAdapterConfig jsonToInputAdapterConfig(const QJsonObject& o) {
+    InputAdapterConfig cfg;
+    cfg.type     = o["type"].toString() == QStringLiteral("midi")
+                   ? InputAdapterType::Midi : InputAdapterType::SacnArtNet;
+    cfg.protocol = stringToDmxProtocol(o["protocol"].toString());
+    cfg.netMode  = stringToDmxNetMode(o["netMode"].toString());
+    cfg.iface    = o["iface"].toString();
+    cfg.unicastIp= o["unicastIp"].toString();
+    cfg.enabled  = o["enabled"].toBool(true);
+    for (const auto& v : o["mappings"].toArray())
+        cfg.mappings.append(jsonToInputAdapterMapping(v.toObject()));
+    return cfg;
+}
+
+static QString operatingModeToString(OperatingMode m) {
+    switch (m) {
+    case OperatingMode::Camera2D:   return QStringLiteral("camera2d");
+    case OperatingMode::Stage3DDMX: return QStringLiteral("stage3ddmx");
+    default:                        return QStringLiteral("stage3dpsn");
+    }
+}
+static OperatingMode stringToOperatingMode(const QString& s) {
+    if (s == QStringLiteral("camera2d"))   return OperatingMode::Camera2D;
+    if (s == QStringLiteral("stage3ddmx")) return OperatingMode::Stage3DDMX;
+    return OperatingMode::Stage3DPSN;
 }
 
 static QString mvrRenderModeToString(MvrRenderModeEnum mode) {
@@ -206,6 +429,7 @@ Project Project::load(const QString& path)
 
     p.videoSourceType       = root["videoSourceType"].toString();
     p.ndiSource             = root["ndiSource"].toString();
+    p.webcamDevice          = root["webcamDevice"].toString();
     p.decklinkDevice        = root["decklinkDevice"].toString();
     p.decklinkConnection    = root["decklinkConnection"].toString();
     p.decklinkAllow10Bit    = root["decklinkAllow10Bit"].toBool(true);
@@ -313,6 +537,14 @@ Project Project::load(const QString& path)
         p.mvr.imports.append(importData);
     }
 
+    p.operatingMode = stringToOperatingMode(root["operatingMode"].toString());
+    if (root.contains("dmxOutput"))
+        p.dmxOutput = jsonToDmxOutputConfig(root["dmxOutput"].toObject());
+    if (root.contains("camera2DCalib"))
+        p.camera2DCalib = jsonToCamera2DCalib(root["camera2DCalib"].toObject());
+    for (const auto& v : root["inputAdapters"].toArray())
+        p.inputAdapters.append(jsonToInputAdapterConfig(v.toObject()));
+
     return p;
 }
 
@@ -324,6 +556,7 @@ void Project::save(const QString& path, std::function<void(int)> progressCb) con
     QJsonObject root;
     root["videoSourceType"]      = videoSourceType;
     root["ndiSource"]            = ndiSource;
+    root["webcamDevice"]         = webcamDevice;
     root["decklinkDevice"]       = decklinkDevice;
     root["decklinkConnection"]   = decklinkConnection;
     root["decklinkAllow10Bit"]   = decklinkAllow10Bit;
@@ -429,6 +662,13 @@ void Project::save(const QString& path, std::function<void(int)> progressCb) con
         importsArr.append(mvrImportToJson(mvr.imports[i], i));
     mvrJson["imports"] = importsArr;
     root["mvr"] = mvrJson;
+
+    root["operatingMode"] = operatingModeToString(operatingMode);
+    root["dmxOutput"]     = dmxOutputConfigToJson(dmxOutput);
+    root["camera2DCalib"] = camera2DCalibToJson(camera2DCalib);
+    QJsonArray adaptersArr;
+    for (const auto& a : inputAdapters) adaptersArr.append(inputAdapterConfigToJson(a));
+    root["inputAdapters"] = adaptersArr;
 
     const QByteArray jsonBytes = QJsonDocument(root).toJson(QJsonDocument::Compact);
 

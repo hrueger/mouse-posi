@@ -19,6 +19,12 @@
 
 class Calibration;
 
+struct FixtureRay {
+    QVector3D origin;
+    QVector3D direction; // normalized
+    QColor    color;
+};
+
 enum class Stage3DTool  { OrbitCamera, Select, DrawRect, DrawPolygon };
 enum class CameraPreset { Top, Front, FrontTop, Left, Right };
 enum class MvrRenderMode { Flat, Shaded, Wireframe };
@@ -41,6 +47,8 @@ public:
     void setSelectedObject(int id);
     void setCalibRectVisible(bool visible);
     void setCameraMarker(QVector3D pos, float fovDeg, bool visible);
+    void setFixtureRays(const QList<FixtureRay>& rays);
+    void setShowRays(bool on);
 
     Stage3DCameraState getCameraState() const;
     void               setCameraState(const Stage3DCameraState& s);
@@ -83,6 +91,7 @@ private:
     void drawCalibRect();
     void drawStageObjects();
     void drawTrackers();
+    void drawFixtureRays();
     void drawMvrLayers();
     void drawMvrLabels(QPainter& p) const;
     void drawDrawingPreview();
@@ -168,4 +177,8 @@ private:
     bool      cameraMarkerVisible_= false;
     QVector3D cameraMarkerPos_;
     float     cameraMarkerFov_    = 60.0f;
+
+    // Fixture rays (Show Rays mode)
+    bool              showRays_    = false;
+    QList<FixtureRay> fixtureRays_;
 };

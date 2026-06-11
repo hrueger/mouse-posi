@@ -400,6 +400,7 @@ void Stage3DView::paintGL()
 
     glDisable(GL_BLEND);
     drawTrackers();
+    drawFixtureRays();
     drawMvrLayers();
     drawDrawingPreview();
     drawCameraMarker();
@@ -800,6 +801,37 @@ void Stage3DView::drawTrackers()
             {x, y-s, z}, {x, y+s, z},
         };
         drawPrimitive(GL_LINES, cross, color);
+    }
+}
+
+void Stage3DView::setFixtureRays(const QList<FixtureRay>& rays)
+{
+    fixtureRays_ = rays;
+    update();
+}
+
+void Stage3DView::setShowRays(bool on)
+{
+    showRays_ = on;
+    update();
+}
+
+void Stage3DView::drawFixtureRays()
+{
+    if (!showRays_ || fixtureRays_.isEmpty()) return;
+
+    constexpr float kMaxLen = 30.0f; // metres
+
+    for (const auto& ray : fixtureRays_) {
+        // Clip ray to floor (y=0) if fixture is above and ray points down
+        float len = kMaxLen;
+        if (ray.origin.y() > 0.0f && ray.direction.y() < 0.0f) {
+            const float t = -ray.origin.y() / ray.direction.y();
+            if (t > 0.0f && t < kMaxLen)
+                len = t;
+        }
+        const QVector3D end = ray.origin + ray.direction * len;
+        drawPrimitive(GL_LINES, { ray.origin, end }, ray.color);
     }
 }
 

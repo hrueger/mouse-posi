@@ -9,17 +9,25 @@
 #include <QLineEdit>
 
 static constexpr int COL_NAME = 0;
-static constexpr int COL_VID  = 1;
-static constexpr int COL_3D   = 2;
+static constexpr int COL_TYPE = 1;
+static constexpr int COL_VID  = 2;
+static constexpr int COL_3D   = 3;
 
 StageItemsPanel::StageItemsPanel(QWidget* parent) : QWidget(parent)
 {
+    filterEdit_ = new QLineEdit;
+    filterEdit_->setPlaceholderText("Filter by name or type (e.g. \"Fixture\")…");
+    filterEdit_->setClearButtonEnabled(true);
+
     tree_ = new QTreeWidget;
-    tree_->setColumnCount(3);
-    tree_->setHeaderLabels({QStringLiteral("Name"), QStringLiteral("Vid"), QStringLiteral("3D")});
+    tree_->setColumnCount(4);
+    tree_->setHeaderLabels({QStringLiteral("Name"), QStringLiteral("Type"),
+                            QStringLiteral("Vid"), QStringLiteral("3D")});
     tree_->header()->setSectionResizeMode(COL_NAME, QHeaderView::Stretch);
+    tree_->header()->setSectionResizeMode(COL_TYPE, QHeaderView::Interactive);
     tree_->header()->setSectionResizeMode(COL_VID,  QHeaderView::Fixed);
     tree_->header()->setSectionResizeMode(COL_3D,   QHeaderView::Fixed);
+    tree_->setColumnWidth(COL_TYPE, 90);
     tree_->setColumnWidth(COL_VID, 36);
     tree_->setColumnWidth(COL_3D,  36);
     tree_->setSelectionBehavior(QAbstractItemView::SelectRows);
@@ -47,9 +55,11 @@ StageItemsPanel::StageItemsPanel(QWidget* parent) : QWidget(parent)
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(4, 4, 4, 4);
     layout->setSpacing(4);
+    layout->addWidget(filterEdit_);
     layout->addWidget(tree_, 1);
     layout->addLayout(listBtns);
 
+    connect(filterEdit_, &QLineEdit::textChanged, this, &StageItemsPanel::applyFilter);
     connect(addRectBtn_,    &QToolButton::clicked, this, &StageItemsPanel::addRectRequested);
     connect(addPolyBtn_,    &QToolButton::clicked, this, &StageItemsPanel::addPolygonRequested);
     connect(addOutlineBtn_, &QToolButton::clicked, this, &StageItemsPanel::addStageOutlineRequested);
@@ -142,6 +152,15 @@ void StageItemsPanel::onItemSelectionChanged()
         selectedId_ = -999;
         updateButtonStates();
         emit mvrImportSelected(cur->data(COL_NAME, RoleMvrImport).toInt());
+    } else if (kind == QLatin1String("mvr-obj")) {
+        selectedId_ = -999;
+        updateButtonStates();
+        emit mvrChildItemSelected();
+        const int importIdx = cur->data(COL_NAME, RoleMvrImport).toInt();
+        const int layerIdx  = cur->data(COL_NAME, RoleMvrLayer).toInt();
+        const int objIdx    = cur->data(COL_NAME, RoleMvrObj).toInt();
+        if (importIdx >= 0 && layerIdx >= 0 && objIdx >= 0)
+            emit mvrFixtureSelected(importIdx, layerIdx, objIdx);
     } else {
         selectedId_ = -999;
         updateButtonStates();
@@ -276,9 +295,19 @@ void StageItemsPanel::rebuildTree()
         auto* item = new QTreeWidgetItem(tree_);
         const bool isSystem = (obj.id < 0);
 
+        // Determine type label
+        QString typeStr;
+        if (obj.id == -1)          typeStr = QStringLiteral("Camera");
+        else if (obj.id == -2)     typeStr = QStringLiteral("Calib");
+        else if (obj.isStageOutline) typeStr = QStringLiteral("Outline");
+        else if (obj.isRect)       typeStr = QStringLiteral("Rectangle");
+        else                       typeStr = QStringLiteral("Polygon");
+
         item->setText(COL_NAME, obj.name);
-        item->setData(COL_NAME, RoleKind, QStringLiteral("stage"));
-        item->setData(COL_NAME, RoleId,   obj.id);
+        item->setText(COL_TYPE, typeStr);
+        item->setData(COL_NAME, RoleKind,    QStringLiteral("stage"));
+        item->setData(COL_NAME, RoleId,      obj.id);
+        item->setData(COL_NAME, RoleTypeStr, typeStr);
         item->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable |
                        (isSystem ? Qt::ItemFlag{} : Qt::ItemIsEditable));
         if (isSystem) item->setForeground(COL_NAME, QColor(160, 160, 160));
@@ -332,10 +361,21 @@ void StageItemsPanel::rebuildTree()
                 auto* objItem = new QTreeWidgetItem(layerItem);
                 objItem->setText(COL_NAME, obj.name.isEmpty()
                                              ? QStringLiteral("(obj)") : obj.name);
+
+                QString typeStr;
+                switch (obj.type) {
+                    case MvrObject::Type::Fixture:     typeStr = QStringLiteral("Fixture");     break;
+                    case MvrObject::Type::Truss:       typeStr = QStringLiteral("Truss");       break;
+                    case MvrObject::Type::SceneObject: typeStr = QStringLiteral("Scene Object"); break;
+                    case MvrObject::Type::Group:       typeStr = QStringLiteral("Group");        break;
+                    default:                           typeStr = QStringLiteral("Object");       break;
+                }
+                objItem->setText(COL_TYPE, typeStr);
                 objItem->setData(COL_NAME, RoleKind,      QStringLiteral("mvr-obj"));
                 objItem->setData(COL_NAME, RoleMvrImport, ii);
                 objItem->setData(COL_NAME, RoleMvrLayer,  li);
                 objItem->setData(COL_NAME, RoleMvrObj,    oi);
+                objItem->setData(COL_NAME, RoleTypeStr,   typeStr);
                 objItem->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemIsUserCheckable);
                 objItem->setCheckState(COL_3D, obj.enabled ? Qt::Checked : Qt::Unchecked);
             }
@@ -349,4 +389,42 @@ void StageItemsPanel::rebuildTree()
 void StageItemsPanel::updateButtonStates()
 {
     deleteBtn_->setEnabled(selectedId_ >= 0);
+}
+
+void StageItemsPanel::applyFilter(const QString& text)
+{
+    const QString lc = text.trimmed().toLower();
+
+    // Recurse through all top-level items and their children
+    for (int i = 0; i < tree_->topLevelItemCount(); ++i) {
+        auto* top = tree_->topLevelItem(i);
+        const QString kind = top->data(COL_NAME, RoleKind).toString();
+
+        if (kind == QLatin1String("stage")) {
+            if (lc.isEmpty()) { top->setHidden(false); continue; }
+            const QString name = top->text(COL_NAME).toLower();
+            const QString type = top->data(COL_NAME, RoleTypeStr).toString().toLower();
+            top->setHidden(!name.contains(lc) && !type.contains(lc));
+        } else {
+            // MVR root — check children
+            bool anyVisible = false;
+            for (int li = 0; li < top->childCount(); ++li) {
+                auto* layer = top->child(li);
+                bool layerHasMatch = false;
+                for (int oi = 0; oi < layer->childCount(); ++oi) {
+                    auto* obj = layer->child(oi);
+                    if (lc.isEmpty()) { obj->setHidden(false); layerHasMatch = true; continue; }
+                    const QString name = obj->text(COL_NAME).toLower();
+                    const QString type = obj->data(COL_NAME, RoleTypeStr).toString().toLower();
+                    const bool match = name.contains(lc) || type.contains(lc);
+                    obj->setHidden(!match);
+                    if (match) layerHasMatch = true;
+                }
+                layer->setHidden(!layerHasMatch);
+                if (layerHasMatch) { anyVisible = true; layer->setExpanded(!lc.isEmpty()); }
+            }
+            top->setHidden(!anyVisible && !lc.isEmpty());
+            if (anyVisible && !lc.isEmpty()) top->setExpanded(true);
+        }
+    }
 }

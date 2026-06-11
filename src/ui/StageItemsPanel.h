@@ -7,6 +7,7 @@
 class QTreeWidget;
 class QTreeWidgetItem;
 class QToolButton;
+class QLineEdit;
 
 class StageItemsPanel : public QWidget {
     Q_OBJECT
@@ -31,6 +32,8 @@ signals:
     void mvrImportDeleteRequested(int importIdx);
     void mvrImportSelected(int importIdx);
     void mvrChildItemSelected();
+    // Emitted when an MVR fixture object is selected (not a layer or group)
+    void mvrFixtureSelected(int importIdx, int layerIdx, int objIdx);
 
 private slots:
     void onItemSelectionChanged();
@@ -48,8 +51,12 @@ private:
         RoleMvrLayer   = Qt::UserRole + 2,  // MVR layer index
         RoleMvrObj     = Qt::UserRole + 3,  // MVR object index (-1 for layer rows)
         RoleMvrImport  = Qt::UserRole + 4,  // MVR import index (which root)
+        RoleTypeStr    = Qt::UserRole + 5,  // type string for filtering
     };
 
+    void applyFilter(const QString& text);
+
+    QLineEdit*     filterEdit_;
     QTreeWidget*   tree_;
     QToolButton*   addRectBtn_;
     QToolButton*   addPolyBtn_;

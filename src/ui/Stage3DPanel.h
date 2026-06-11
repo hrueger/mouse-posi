@@ -32,6 +32,8 @@ public:
 
     void setCalibRectVisible(bool visible);
     void setCameraMarker(QVector3D pos, float fovDeg, bool visible);
+    void setFixtureRays(const QList<FixtureRay>& rays);
+    void setShowRays(bool on);
 
 signals:
     void polygonDrawn(QPolygonF polygon);
