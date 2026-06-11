@@ -5,7 +5,6 @@
 #include "../adapters/MidiInputAdapter.h"
 
 class QListWidget;
-class QStackedWidget;
 class QPushButton;
 class QComboBox;
 class QCheckBox;
@@ -15,22 +14,19 @@ class QScrollArea;
 class QVBoxLayout;
 class QHBoxLayout;
 
-// Editable row widget for one InputAdapterMapping
+// Editable row widget for one MIDI InputAdapterMapping
 class MappingRowWidget : public QWidget {
     Q_OBJECT
 public:
-    explicit MappingRowWidget(const InputAdapterMapping& m, bool isMidi, QWidget* parent = nullptr);
+    explicit MappingRowWidget(const InputAdapterMapping& m, QWidget* parent = nullptr);
     InputAdapterMapping mapping() const;
 signals:
     void changed();
     void removeRequested();
 private:
-    void buildDmxRow(const InputAdapterMapping& m, QHBoxLayout* lay);
-    void buildMidiRow(const InputAdapterMapping& m, QHBoxLayout* lay);
-    bool        isMidi_;
     QComboBox*  targetCombo_;
-    QSpinBox*   spin1_;      // universe (DMX) or CC number (MIDI)
-    QSpinBox*   spin2_;      // channel (DMX) or MIDI channel
+    QSpinBox*   spin1_;      // CC number
+    QSpinBox*   spin2_;      // MIDI channel
     QDoubleSpinBox* minSpin_;
     QDoubleSpinBox* maxSpin_;
 };
@@ -52,7 +48,6 @@ private slots:
     void onRemoveAdapter();
     void onAddMapping();
     void onAdapterFieldChanged();
-    void onTypeChanged(int idx);
 
 private:
     void rebuildAdapterList();
@@ -68,15 +63,7 @@ private:
 
     // Right panel — adapter detail
     QWidget*      detailWidget_;
-    QComboBox*    typeCombo_;
     QCheckBox*    enabledCheck_;
-    // DMX fields
-    QWidget*      dmxFields_;
-    QComboBox*    protocolCombo_;
-    QComboBox*    netModeCombo_;
-    QComboBox*    ifaceCombo_;
-    QWidget*      unicastRow_;
-    QWidget*      unicastIpEdit_;  // actually QLineEdit, forward-declared as QWidget
     // MIDI fields
     QWidget*      midiFields_;
     QComboBox*    midiPortCombo_;

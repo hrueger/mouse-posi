@@ -606,11 +606,14 @@ static MvrObject readSceneObject(ISceneObj* sceneObj,
 static void collectLayerObjects(IMediaRessourceVectorInterfacePtr& mvr,
                                 ISceneObj* firstObject,
                                 QList<MvrObject>& out,
-                                const QString& zipPath)
+                                const QString& zipPath,
+                                const std::function<void()>& tickCb)
 {
     ISceneObjPtr object = firstObject;
     while (object) {
         MvrObject current = readSceneObject(object, zipPath);
+        if (tickCb) tickCb();  // yield to the event loop between objects
+
         ISceneObjPtr child;
         const bool hasChildren = (mvr->GetFirstChild(object, &child) == kVCOMError_NoError && child);
 
@@ -623,7 +626,7 @@ static void collectLayerObjects(IMediaRessourceVectorInterfacePtr& mvr,
         }
 
         if (hasChildren) {
-            collectLayerObjects(mvr, child, out, zipPath);
+            collectLayerObjects(mvr, child, out, zipPath, tickCb);
         }
 
         ISceneObjPtr next;
@@ -637,7 +640,8 @@ static void collectLayerObjects(IMediaRessourceVectorInterfacePtr& mvr,
 
 // ─── Public API ──────────────────────────────────────────────────────────────
 
-MvrImporter::ParseResult MvrImporter::parse(const QString& filePath)
+MvrImporter::ParseResult MvrImporter::parse(const QString& filePath,
+                                             std::function<void()> tickCb)
 {
     ParseResult result;
 
@@ -665,7 +669,7 @@ MvrImporter::ParseResult MvrImporter::parse(const QString& filePath)
 
         ISceneObjPtr child;
         if (mvr->GetFirstChild(layer, &child) == kVCOMError_NoError && child) {
-            collectLayerObjects(mvr, child, layerInfo.objects, filePath);
+            collectLayerObjects(mvr, child, layerInfo.objects, filePath, tickCb);
         }
 
         result.layers.append(layerInfo);
@@ -681,7 +685,8 @@ MvrImporter::ParseResult MvrImporter::parse(const QString& filePath)
     return result;
 }
 
-MvrImporter::ParseResult MvrImporter::parseFromData(const QByteArray& data)
+MvrImporter::ParseResult MvrImporter::parseFromData(const QByteArray& data,
+                                                     std::function<void()> tickCb)
 {
     QTemporaryFile tmp;
     tmp.setAutoRemove(true);
@@ -692,7 +697,7 @@ MvrImporter::ParseResult MvrImporter::parseFromData(const QByteArray& data)
     }
     tmp.write(data);
     tmp.flush();
-    return parse(tmp.fileName());
+    return parse(tmp.fileName(), tickCb);
 }
 
 MvrImporter::Result MvrImporter::import(const QString& filePath)

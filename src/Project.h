@@ -118,6 +118,30 @@ struct DmxOutputConfig {
     QList<DmxUniverseConfig> inputs;   // replacement mode: source universes (keyed by universe #)
 };
 
+// ─── Unified DMX Universe system ─────────────────────────────────────────────
+
+enum class DmxUniverseRole { InControl, InFixtures, OutFixtures };
+
+struct DmxChannelMapping {
+    quint16 channel  = 1;
+    QString target;       // "clickPlaneHeight", "dimmer", "zoom", "iris", "focus"
+    float   minValue = 0.f;
+    float   maxValue = 10.f;
+};
+
+struct DmxUniverseEntry {
+    QString          name;
+    quint16          number   = 1;
+    DmxUniverseRole  role     = DmxUniverseRole::OutFixtures;
+    DmxProtocol      protocol = DmxProtocol::SACN;
+    DmxNetworkMode   netMode  = DmxNetworkMode::Multicast;
+    QString          iface;
+    QString          unicastIp;
+    bool             enabled  = true;
+    QList<DmxChannelMapping> mappings;       // only for role == InControl
+    int  mergeFromUniverse = -1;             // only for role == OutFixtures; -1 = none
+};
+
 // ─── GDTF DMX profile (pan/tilt channel info extracted from GDTF) ────────────
 
 struct GdtfChannelInfo {
@@ -134,6 +158,7 @@ struct GdtfDmxProfile {
     bool    valid     = false;
     int     footprint = 0;       // total DMX channels in the active mode
     QString modeName;            // active mode name (from GDTF / MVR GdtfMode attribute)
+    QMap<int, QString> channelNames; // 1-based relative addr → attribute name for all channels
 };
 
 // ─── Camera 2D calibration (pixel → pan/tilt DMX) ───────────────────────────
@@ -246,6 +271,7 @@ struct Project {
     DmxOutputConfig           dmxOutput;
     Camera2DCalibration       camera2DCalib;
     QList<InputAdapterConfig> inputAdapters;
+    QList<DmxUniverseEntry>   dmxUniverses;
 
     static Project   load(const QString& path);
     void             save(const QString& path,

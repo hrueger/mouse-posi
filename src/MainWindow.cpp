@@ -30,6 +30,7 @@
 #include "ui/SettingsDialog.h"
 #include "ui/FixturesPanel.h"
 #include "ui/GdtfLibraryDialog.h"
+#include "ui/DmxMonitorPanel.h"
 #include "ui/NewProjectWizard.h"
 #include "GdtfLibrary.h"
 #include "ui/StreamSourcePanel.h"
@@ -60,7 +61,12 @@
 #include <QEvent>
 #include <QSet>
 #include <QDateTime>
+#include <QElapsedTimer>
 #include <QMatrix4x4>
+#include <QDialog>
+#include <QComboBox>
+#include <QDialogButtonBox>
+#include <QVBoxLayout>
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
@@ -165,6 +171,8 @@ MainWindow::MainWindow(NdiReceiver* ndi,
     stageItemsDock_       = makeDock("Stage Objects",     "dock_stage_items",      stageItemsPanel_);
     stagePropertiesDock_  = makeDock("Object Properties", "dock_stage_properties", stagePropertiesPanel_);
     fixturesDock_         = makeDock("Fixtures",          "dock_fixtures",         fixturesPanel_);
+    dmxMonitorPanel_      = new DmxMonitorPanel;
+    dmxMonitorDock_       = makeDock("DMX Monitor",       "dock_dmx_monitor",      dmxMonitorPanel_);
     panelDocks_           = {sessionDock_, calibrationDock_,
                              trackersDock_, statsDock_};
 
@@ -190,6 +198,10 @@ MainWindow::MainWindow(NdiReceiver* ndi,
     // Fixtures dock: tabified alongside object properties
     addDockWidget(Qt::RightDockWidgetArea, fixturesDock_);
     tabifyDockWidget(stagePropertiesDock_, fixturesDock_);
+
+    // DMX Monitor dock: tabified alongside fixtures
+    addDockWidget(Qt::RightDockWidgetArea, dmxMonitorDock_);
+    tabifyDockWidget(fixturesDock_, dmxMonitorDock_);
 
     // Default sizing — overridden by saved state on subsequent launches
     resizeDocks({videoDock_},   {1160}, Qt::Horizontal);
@@ -335,42 +347,78 @@ MainWindow::MainWindow(NdiReceiver* ndi,
     // Stage3DPanel: MVR file imported — each import is a separate root node
     connect(stage3DPanel_, &Stage3DPanel::mvrImportChanged,
             this, [this](const MvrImport& import) {
-        mvrImports_.append(import);
-        stage3DPanel_->setMvrImports(mvrImports_);
-        stageItemsPanel_->setMvrImports(mvrImports_);
-        // Convert MvrImport to MvrImportData for storage (metadata + raw MVR bytes)
-        MvrImportData data;
-        data.name    = import.name;
-        data.offsetX = import.offsetX;
-        data.offsetY = import.offsetY;
-        data.offsetZ = import.offsetZ;
-        data.rotDeg  = import.rotDeg;
-        data.enabled = import.enabled;
-        data.mvrData = import.mvrData;
-        for (const auto& layer : import.layers) {
-            MvrLayerData layerData;
-            layerData.name    = layer.name;
-            layerData.enabled = layer.enabled;
-            for (const auto& obj : layer.objects) {
-                MvrObjectData objData;
-                objData.name        = obj.name;
-                objData.type        = MvrObjectData::Type(int(obj.type));
-                objData.positionM   = obj.positionM;
-                objData.xformRot    = obj.xformRot;
-                objData.gdtfSpec    = obj.gdtfSpec;
-                objData.unitNumber  = obj.unitNumber;
-                objData.fixtureId   = obj.fixtureId;
-                objData.dmxAddress  = obj.dmxAddress;
-                objData.universe    = obj.universe;
-                objData.enabled     = obj.enabled;
-                objData.gdtfProfile = obj.gdtfProfile;
-                layerData.objects.append(objData);
-            }
-            data.layers.append(layerData);
+        if (mvrImports_.isEmpty()) {
+            commitMvrImport(import, -1, false);
+            return;
         }
-        project_.mvr.imports.append(data);
-        fixturesPanel_->setData(project_.mvr.imports, project_.trackers);
-        markDirty();
+
+        // ── Ask: add or replace ───────────────────────────────────────────────
+        int replaceIndex = -1;
+        {
+            QMessageBox msgBox(this);
+            msgBox.setWindowTitle(QStringLiteral("Import MVR"));
+            if (mvrImports_.size() == 1) {
+                msgBox.setText(QString("An MVR import named \"%1\" already exists.")
+                               .arg(mvrImports_[0].name));
+            } else {
+                msgBox.setText(QString("%1 MVR imports already exist.").arg(mvrImports_.size()));
+            }
+            msgBox.setInformativeText("What would you like to do?");
+            auto* addBtn     = msgBox.addButton(QStringLiteral("Add as second import"), QMessageBox::AcceptRole);
+            auto* replaceBtn = msgBox.addButton(QStringLiteral("Replace existing…"),    QMessageBox::DestructiveRole);
+            msgBox.addButton(QMessageBox::Cancel);
+            msgBox.exec();
+
+            if (msgBox.clickedButton() == nullptr) return;
+            if (msgBox.clickedButton() == addBtn) {
+                commitMvrImport(import, -1, false);
+                return;
+            }
+            if (msgBox.clickedButton() != replaceBtn) return;
+
+            // Determine which import to replace
+            if (mvrImports_.size() == 1) {
+                replaceIndex = 0;
+            } else {
+                QDialog picker(this);
+                picker.setWindowTitle(QStringLiteral("Replace MVR Import"));
+                auto* lay   = new QVBoxLayout(&picker);
+                auto* lbl   = new QLabel(QStringLiteral("Which import do you want to replace?"), &picker);
+                auto* combo = new QComboBox(&picker);
+                for (const auto& imp : mvrImports_)
+                    combo->addItem(imp.name);
+                auto* btns  = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &picker);
+                lay->addWidget(lbl);
+                lay->addWidget(combo);
+                lay->addWidget(btns);
+                connect(btns, &QDialogButtonBox::accepted, &picker, &QDialog::accept);
+                connect(btns, &QDialogButtonBox::rejected, &picker, &QDialog::reject);
+                if (picker.exec() != QDialog::Accepted) return;
+                replaceIndex = combo->currentIndex();
+            }
+        }
+
+        // ── Ask: copy config or clean ─────────────────────────────────────────
+        bool copyConfig = false;
+        {
+            QMessageBox msgBox(this);
+            msgBox.setWindowTitle(QStringLiteral("Replace MVR Import"));
+            msgBox.setText(QString("How should the existing configuration of \"%1\" be handled?")
+                           .arg(mvrImports_[replaceIndex].name));
+            msgBox.setInformativeText(
+                "Copy configuration preserves stage position, rotation, "
+                "visibility settings, and tracker assignments.");
+            auto* copyBtn = msgBox.addButton(QStringLiteral("Copy configuration"), QMessageBox::AcceptRole);
+            msgBox.addButton(QStringLiteral("Import cleanly"), QMessageBox::DestructiveRole);
+            msgBox.addButton(QMessageBox::Cancel);
+            msgBox.exec();
+
+            if (msgBox.clickedButton() == nullptr || msgBox.clickedButton() == msgBox.button(QMessageBox::Cancel))
+                return;
+            copyConfig = (msgBox.clickedButton() == copyBtn);
+        }
+
+        commitMvrImport(import, replaceIndex, copyConfig);
     });
 
     // Items panel: layer/object visibility toggled
@@ -479,6 +527,17 @@ MainWindow::MainWindow(NdiReceiver* ndi,
         markDirty();
     });
 
+    connect(fixturesPanel_, &FixturesPanel::trackerLinkChanged,
+        this, [this](int importIdx, int layerIdx, int objIdx, int trackerLink) {
+            if (importIdx < 0 || importIdx >= project_.mvr.imports.size()) return;
+            auto& imp = project_.mvr.imports[importIdx];
+            if (layerIdx < 0 || layerIdx >= imp.layers.size()) return;
+            auto& layer = imp.layers[layerIdx];
+            if (objIdx < 0 || objIdx >= layer.objects.size()) return;
+            layer.objects[objIdx].trackerLink = trackerLink;
+            markDirty();
+        });
+
     connect(fixturesPanel_, &FixturesPanel::gdtfAssignRequested,
             this, &MainWindow::onAssignGdtf);
 
@@ -553,11 +612,6 @@ MainWindow::MainWindow(NdiReceiver* ndi,
     statusPsnOut_ = new QLabel("● PSN Out");
     statusPsnOut_->setStyleSheet("color: #cc3333; padding: 0 8px;");
     statusBar()->addPermanentWidget(statusPsnOut_);
-
-    statusSacnIn_ = new QLabel("● sACN In");
-    statusSacnIn_->setStyleSheet("color: #888888; padding: 0 8px;");
-    statusSacnIn_->setVisible(false);
-    statusBar()->addPermanentWidget(statusSacnIn_);
 
     statusSession_ = new QLabel;
     leaveSessionBtn_ = new QPushButton("Leave Session");
@@ -663,22 +717,21 @@ MainWindow::MainWindow(NdiReceiver* ndi,
             psnReceiver_->stop();
             psnReceiver_->wait();
         }
-        sacnLastReceivedMs_ = -1;
-        statusSacnIn_->setText("● sACN In");
-        statusSacnIn_->setStyleSheet("color: #888888; padding: 0 8px;");
-        statusSacnIn_->setVisible(cfg.sacnInput.enabled);
-        const SacnInputConfig sacnCfg = cfg.sacnInput;
-        QMetaObject::invokeMethod(sacnReceiver_, [this, sacnCfg]() {
-            sacnReceiver_->stop();
-            if (sacnCfg.enabled)
-                sacnReceiver_->startListening(sacnCfg);
-        });
         markDirty();
     });
     connect(settingsDialog_, &SettingsDialog::inputAdaptersChanged,
             this, [this](const QList<InputAdapterConfig>& adapters) {
         project_.inputAdapters = adapters;
         reconfigureInputAdapters();
+        markDirty();
+    });
+    connect(settingsDialog_, &SettingsDialog::dmxUniversesChanged,
+            this, [this](const QList<DmxUniverseEntry>& universes) {
+        project_.dmxUniverses = universes;
+        reconfigureDmxOutput();
+        reconfigureInputAdapters();
+        if (dmxMonitorPanel_)
+            dmxMonitorPanel_->setUniverses(universes);
         markDirty();
     });
     connect(settingsDialog_, &SettingsDialog::operatingModeChanged, this, [this](OperatingMode mode) {
@@ -727,14 +780,6 @@ MainWindow::MainWindow(NdiReceiver* ndi,
             this, [this](float h) {
         if (applyingProject_) return;
         applyPlaneHeight(h);
-    });
-    connect(sacnReceiver_, &SacnReceiver::heightReceived,
-            this, [this](float h, const QString& src) {
-        sacnLastReceivedMs_ = QDateTime::currentMSecsSinceEpoch();
-        sacnSourceName_     = src;
-        applyPlaneHeight(h);
-        statusSacnIn_->setText("● sACN In");
-        statusSacnIn_->setStyleSheet("color: #33cc55; padding: 0 8px;");
     });
     connect(video_, &VideoWidget::planeHeightScrolled,
             this, [this](float delta) {
@@ -952,6 +997,7 @@ MainWindow::MainWindow(NdiReceiver* ndi,
     viewMenu->addAction(stageItemsDock_->toggleViewAction());
     viewMenu->addAction(stagePropertiesDock_->toggleViewAction());
     viewMenu->addAction(fixturesDock_->toggleViewAction());
+    viewMenu->addAction(dmxMonitorDock_->toggleViewAction());
     viewMenu->addSeparator();
     auto* actResetLayout = viewMenu->addAction("Reset Layout");
 
@@ -1076,6 +1122,7 @@ void MainWindow::showWelcomeScreen()
     stageItemsDock_->hide();
     stagePropertiesDock_->hide();
     fixturesDock_->hide();
+    dmxMonitorDock_->hide();
     for (auto* d : panelDocks_) d->hide();
 }
 
@@ -1102,6 +1149,7 @@ void MainWindow::showWorkspace()
     stageItemsDock_->show();
     stagePropertiesDock_->show();
     fixturesDock_->show();
+    dmxMonitorDock_->show();
     for (auto* d : panelDocks_) d->show();
 }
 
@@ -1347,6 +1395,7 @@ void MainWindow::applyProject() {
     trackerBar_->setTrackers(project_.trackers);
     settingsDialog_->setNetworkConfig(project_.network);
     settingsDialog_->setInputAdapters(project_.inputAdapters);
+    settingsDialog_->setDmxUniverses(project_.dmxUniverses);
     settingsDialog_->setOperatingMode(project_.operatingMode);
     sessionPanel_->setSessionInterface(project_.network.sessionInterface);
     psnSender_->configure(project_.network);
@@ -1401,15 +1450,8 @@ void MainWindow::applyProject() {
     video_->setShowFloorGrid(cv.showFloorGrid);
     video_->setShowClickPlane(cv.showClickPlane);
     video_->setCalibBoundaryVisible(cv.showCalibRectInVideo);
-    sacnLastReceivedMs_ = -1;
-    statusSacnIn_->setVisible(project_.network.sacnInput.enabled);
-    statusSacnIn_->setText("● sACN In");
-    statusSacnIn_->setStyleSheet("color: #888888; padding: 0 8px;");
-    const SacnInputConfig sacnCfg = project_.network.sacnInput;
-    QMetaObject::invokeMethod(sacnReceiver_, [this, sacnCfg]() {
+    QMetaObject::invokeMethod(sacnReceiver_, [this]() {
         sacnReceiver_->stop();
-        if (sacnCfg.enabled)
-            sacnReceiver_->startListening(sacnCfg);
     });
 
     // Restore MVR imports by parsing the embedded MVR data on the main thread.
@@ -1418,16 +1460,41 @@ void MainWindow::applyProject() {
     {
         const int n = project_.mvr.imports.size();
         for (int i = 0; i < n; ++i) {
-            // Animate progress bar: 15% (after ZIP load) → 95% spread across imports.
-            if (saveLoadProgressBar_ && saveLoadProgressBar_->isVisible()) {
-                setProgressAnimated(15 + 80 * i / std::max(n, 1));
-                // Let the animation run visibly before the next blocking parse.
-                QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents, 350);
-            }
-
             const auto& importData = project_.mvr.imports[i];
             if (importData.mvrData.isEmpty()) continue;
-            auto pr = MvrImporter::parseFromData(importData.mvrData);
+
+            // Start a long animation covering this import's slice of the bar
+            // (15–95% spread across imports). The animation will actually tick
+            // because processEvents is called inside the per-object tickCb below.
+            if (saveLoadProgressBar_ && saveLoadProgressBar_->isVisible()) {
+                const int from = 15 + 80 *  i      / std::max(n, 1);
+                const int to   = 15 + 80 * (i + 1) / std::max(n, 1);
+                if (progressAnim_) progressAnim_->stop();
+                progressAnim_ = new QPropertyAnimation(saveLoadProgressBar_, "value", this);
+                connect(progressAnim_, &QPropertyAnimation::destroyed,
+                        this, [this] { progressAnim_ = nullptr; });
+                progressAnim_->setDuration(10000); // generous upper bound; stopped early on finish
+                progressAnim_->setStartValue(from);
+                progressAnim_->setEndValue(to);
+                progressAnim_->setEasingCurve(QEasingCurve::Linear);
+                progressAnim_->start(QAbstractAnimation::DeleteWhenStopped);
+            }
+
+            // Throttled processEvents tick — called after each scene object so
+            // animations run and the window stays repaintable during the parse.
+            // ExcludeUserInputEvents keeps re-entrant user actions (open, close) blocked.
+            QElapsedTimer tickTimer;
+            tickTimer.start();
+            qint64 lastTick = -16; // fire on first call
+            auto tickCb = [&]() {
+                const qint64 now = tickTimer.elapsed();
+                if (now - lastTick >= 16) { // ~60 fps
+                    QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+                    lastTick = now;
+                }
+            };
+
+            auto pr = MvrImporter::parseFromData(importData.mvrData, tickCb);
             if (!pr.error.isEmpty()) continue;
 
             MvrImport import;
@@ -1456,10 +1523,10 @@ void MainWindow::applyProject() {
             }
             mvrImports_.append(import);
         }
-        // Animate to 100% then hide.
+        // Stop any in-progress parse animation and snap to 100%.
         if (saveLoadProgressBar_ && saveLoadProgressBar_->isVisible()) {
             setProgressAnimated(100);
-            QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents, 450);
+            QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents, 200);
             saveLoadProgressBar_->setVisible(false);
         }
     }
@@ -1468,6 +1535,10 @@ void MainWindow::applyProject() {
     stage3DPanel_->setShowMvrLabels(project_.mvr.showLabels);
     stage3DPanel_->setMvrRenderMode(MvrRenderMode(int(project_.mvr.renderMode)));
     fixturesPanel_->setData(project_.mvr.imports, project_.trackers);
+    if (dmxMonitorPanel_) {
+        dmxMonitorPanel_->setUniverses(project_.dmxUniverses);
+        dmxMonitorPanel_->setMvrImports(project_.mvr.imports);
+    }
 
     updateCalibStatus();
     applyingProject_ = false;
@@ -1571,24 +1642,16 @@ void MainWindow::updateStatsTimer() {
     statsPanel_->setPsnTxRate(txRate);
     statsPanel_->setPsnRxRate(rxRate, psnReceiver_->remotePositions().size());
 
-    int sacnRate = 0;
+    int dmxRxRate = 0;
     if (elapsed > 0.0) {
-        quint64 sacnTotal = sacnReceiver_->totalSacnReceived();
-        sacnRate = std::max(0, static_cast<int>(
-            std::llround((sacnTotal - lastSacnRxPackets_) / elapsed)));
-        lastSacnRxPackets_ = sacnTotal;
+        quint64 dmxTotal = quint64(dmxReceiver_->totalFramesReceived());
+        dmxRxRate = std::max(0, static_cast<int>(
+            std::llround(double(dmxTotal - lastSacnRxPackets_) / elapsed)));
+        lastSacnRxPackets_ = dmxTotal;
     }
-    const bool sacnActive = project_.network.sacnInput.enabled
-        && sacnLastReceivedMs_ >= 0
-        && (QDateTime::currentMSecsSinceEpoch() - sacnLastReceivedMs_) < 2000;
-    if (project_.network.sacnInput.enabled) {
-        statusSacnIn_->setVisible(true);
-        if (!sacnActive) {
-            statusSacnIn_->setText("● sACN In");
-            statusSacnIn_->setStyleSheet("color: #888888; padding: 0 8px;");
-        }
-    }
-    statsPanel_->setSacnRxInfo(project_.network.sacnInput.enabled, sacnRate, clickPlaneHeight_);
+    const bool hasDmxControl = std::any_of(project_.dmxUniverses.begin(), project_.dmxUniverses.end(),
+        [](const DmxUniverseEntry& e){ return e.enabled && e.role == DmxUniverseRole::InControl; });
+    statsPanel_->setSacnRxInfo(hasDmxControl, dmxRxRate, clickPlaneHeight_);
 
     if (txRate > 0) {
         statusPsnOut_->setStyleSheet("color: #33aa44; padding: 0 4px;");
@@ -1991,30 +2054,72 @@ void MainWindow::syncAllStageObjects()
 void MainWindow::reconfigureDmxOutput() {
     dmxSender_->stop();
     dmxReceiver_->stop();
+    if (dmxMonitorPanel_)
+        disconnect(dmxReceiver_, nullptr, dmxMonitorPanel_, nullptr);
 
-    const auto& cfg = project_.dmxOutput;
     if (project_.operatingMode == OperatingMode::Stage3DPSN) return;
 
-    dmxSender_->configure(cfg.outputs);
-    if (cfg.outputMode == DmxOutputMode::Replacement)
-        dmxReceiver_->configure(cfg.inputs);
+    QList<DmxUniverseConfig> outConfigs, inConfigs;
+    for (const auto& e : project_.dmxUniverses) {
+        if (!e.enabled) continue;
+        DmxUniverseConfig uc;
+        uc.universe  = e.number;
+        uc.protocol  = e.protocol;
+        uc.netMode   = e.netMode;
+        uc.iface     = e.iface;
+        uc.unicastIp = e.unicastIp;
+        if (e.role == DmxUniverseRole::OutFixtures)
+            outConfigs.append(uc);
+        else
+            inConfigs.append(uc);  // InFixtures + InControl both receive
+    }
+    if (!outConfigs.isEmpty())
+        dmxSender_->configure(outConfigs);
+    if (!inConfigs.isEmpty()) {
+        dmxReceiver_->configure(inConfigs);
+        if (dmxMonitorPanel_) {
+            connect(dmxReceiver_, &DmxReceiver::dmxFrameReceived,
+                    dmxMonitorPanel_, &DmxMonitorPanel::updateInFrame);
+        }
+    }
 }
 
 void MainWindow::reconfigureInputAdapters() {
     for (auto* a : inputAdapters_) { a->stop(); a->deleteLater(); }
     inputAdapters_.clear();
 
-    for (const auto& cfg : project_.inputAdapters) {
-        if (!cfg.enabled) continue;
-        InputAdapterBase* adapter = nullptr;
-        if (cfg.type == InputAdapterType::SacnArtNet)
-            adapter = new SacnArtNetInputAdapter(cfg, this);
-        else
-            adapter = new MidiInputAdapter(cfg, this);
-
+    // DMX InControl universes → SacnArtNetInputAdapter (one per entry)
+    for (const auto& e : project_.dmxUniverses) {
+        if (!e.enabled || e.role != DmxUniverseRole::InControl) continue;
+        InputAdapterConfig cfg;
+        cfg.type      = InputAdapterType::SacnArtNet;
+        cfg.protocol  = e.protocol;
+        cfg.netMode   = e.netMode;
+        cfg.iface     = e.iface;
+        cfg.unicastIp = e.unicastIp;
+        cfg.enabled   = true;
+        for (const auto& m : e.mappings) {
+            InputAdapterMapping im;
+            im.target   = m.target;
+            im.universe = e.number;
+            im.channel  = m.channel;
+            im.minValue = m.minValue;
+            im.maxValue = m.maxValue;
+            cfg.mappings.append(im);
+        }
+        auto* adapter = new SacnArtNetInputAdapter(cfg, this);
         connect(adapter, &InputAdapterBase::clickPlaneHeightChanged,
                 this, [this](float h) { applyPlaneHeight(h); });
+        inputAdapters_.append(adapter);
+        adapter->start();
+    }
 
+    // MIDI adapters from project_.inputAdapters
+    for (const auto& cfg : project_.inputAdapters) {
+        if (!cfg.enabled || cfg.type != InputAdapterType::Midi) continue;
+        auto* adapter = new MidiInputAdapter(cfg, this);
+        connect(adapter, &InputAdapterBase::clickPlaneHeightChanged,
+                this, [this](float h) { applyPlaneHeight(h); });
         inputAdapters_.append(adapter);
         adapter->start();
     }
@@ -2025,11 +2130,18 @@ void MainWindow::sendDmxForMode() {
     QMap<QString, FixtureStatus> statusMap;
     QList<FixtureRay> fixtureRays;
 
+    auto getMergeUniverse = [&](quint16 outUni) -> int {
+        for (const auto& e : project_.dmxUniverses)
+            if (e.enabled && e.role == DmxUniverseRole::OutFixtures && e.number == outUni)
+                return e.mergeFromUniverse;
+        return -1;
+    };
     auto getFrame = [&](quint16 uni) -> QByteArray& {
         auto it = frames.find(uni);
         if (it == frames.end()) {
-            if (project_.dmxOutput.outputMode == DmxOutputMode::Replacement)
-                frames[uni] = dmxReceiver_->latestFrame(uni);
+            int mergeUni = getMergeUniverse(uni);
+            if (mergeUni >= 0)
+                frames[uni] = dmxReceiver_->latestFrame(quint16(mergeUni));
             else
                 frames[uni] = QByteArray(512, '\0');
         }
@@ -2117,7 +2229,8 @@ void MainWindow::sendDmxForMode() {
                     st.panDmx  = pt.pan;
                     st.tiltDmx = pt.tilt;
 
-                    if (project_.dmxOutput.outputs.isEmpty()) continue;
+                    if (!std::any_of(project_.dmxUniverses.begin(), project_.dmxUniverses.end(),
+                            [](const DmxUniverseEntry& e){ return e.enabled && e.role == DmxUniverseRole::OutFixtures; })) continue;
                     QByteArray& frame = getFrame(quint16(obj.universe));
                     if (frame.size() < 512) frame.resize(512, '\0');
                     const int baseAddr = obj.dmxAddress - 1;
@@ -2156,7 +2269,8 @@ void MainWindow::sendDmxForMode() {
                         st.panDmx  = panVal;
                         st.tiltDmx = tiltVal;
 
-                        if (project_.dmxOutput.outputs.isEmpty()) continue;
+                        if (!std::any_of(project_.dmxUniverses.begin(), project_.dmxUniverses.end(),
+                            [](const DmxUniverseEntry& e){ return e.enabled && e.role == DmxUniverseRole::OutFixtures; })) continue;
                         QByteArray& frame = getFrame(quint16(obj.universe));
                         if (frame.size() < 512) frame.resize(512, '\0');
                         const int baseAddr = obj.dmxAddress - 1;
@@ -2171,9 +2285,14 @@ void MainWindow::sendDmxForMode() {
     fixturesPanel_->updateStatus(statusMap);
     stage3DPanel_->setFixtureRays(fixtureRays);
 
-    if (!project_.dmxOutput.outputs.isEmpty()) {
-        for (auto it = frames.constBegin(); it != frames.constEnd(); ++it)
+    const bool hasOutputs = std::any_of(project_.dmxUniverses.begin(), project_.dmxUniverses.end(),
+        [](const DmxUniverseEntry& e){ return e.enabled && e.role == DmxUniverseRole::OutFixtures; });
+    if (hasOutputs) {
+        for (auto it = frames.constBegin(); it != frames.constEnd(); ++it) {
             dmxSender_->sendFrame(it.key(), it.value());
+            if (dmxMonitorPanel_)
+                dmxMonitorPanel_->updateOutFrame(it.key(), it.value());
+        }
     }
 }
 
@@ -2258,5 +2377,113 @@ void MainWindow::onAssignGdtf(int importIdx, int layerIdx, int objIdx)
             }
 
     fixturesPanel_->setData(project_.mvr.imports, project_.trackers);
+    markDirty();
+}
+
+// ── MVR import helpers ────────────────────────────────────────────────────────
+
+static MvrImportData buildMvrImportData(const MvrImport& import)
+{
+    MvrImportData data;
+    data.name    = import.name;
+    data.offsetX = import.offsetX;
+    data.offsetY = import.offsetY;
+    data.offsetZ = import.offsetZ;
+    data.rotDeg  = import.rotDeg;
+    data.enabled = import.enabled;
+    data.mvrData = import.mvrData;
+    for (const auto& layer : import.layers) {
+        MvrLayerData layerData;
+        layerData.name    = layer.name;
+        layerData.enabled = layer.enabled;
+        for (const auto& obj : layer.objects) {
+            MvrObjectData objData;
+            objData.name        = obj.name;
+            objData.type        = MvrObjectData::Type(int(obj.type));
+            objData.positionM   = obj.positionM;
+            objData.xformRot    = obj.xformRot;
+            objData.gdtfSpec    = obj.gdtfSpec;
+            objData.unitNumber  = obj.unitNumber;
+            objData.fixtureId   = obj.fixtureId;
+            objData.dmxAddress  = obj.dmxAddress;
+            objData.universe    = obj.universe;
+            objData.enabled     = obj.enabled;
+            objData.gdtfProfile = obj.gdtfProfile;
+            layerData.objects.append(objData);
+        }
+        data.layers.append(layerData);
+    }
+    return data;
+}
+
+// Match objects by fixtureId (preferred) or name, and copy user-configured state.
+static void copyMvrConfig(MvrImport& newImport, MvrImportData& newData,
+                          const MvrImport& oldImport, const MvrImportData& oldData)
+{
+    newImport.offsetX = oldImport.offsetX;
+    newImport.offsetY = oldImport.offsetY;
+    newImport.offsetZ = oldImport.offsetZ;
+    newImport.rotDeg  = oldImport.rotDeg;
+    newImport.enabled = oldImport.enabled;
+    newData.offsetX   = oldData.offsetX;
+    newData.offsetY   = oldData.offsetY;
+    newData.offsetZ   = oldData.offsetZ;
+    newData.rotDeg    = oldData.rotDeg;
+    newData.enabled   = oldData.enabled;
+
+    for (auto& newLayer : newImport.layers) {
+        for (const auto& oldLayer : oldImport.layers) {
+            if (newLayer.name != oldLayer.name) continue;
+            newLayer.enabled = oldLayer.enabled;
+            for (auto& newObj : newLayer.objects) {
+                for (const auto& oldObj : oldLayer.objects) {
+                    const bool match = (!newObj.fixtureId.isEmpty() && newObj.fixtureId == oldObj.fixtureId)
+                                       || newObj.name == oldObj.name;
+                    if (!match) continue;
+                    newObj.enabled = oldObj.enabled;
+                    break;
+                }
+            }
+            break;
+        }
+    }
+
+    for (auto& newLayer : newData.layers) {
+        for (const auto& oldLayer : oldData.layers) {
+            if (newLayer.name != oldLayer.name) continue;
+            newLayer.enabled = oldLayer.enabled;
+            for (auto& newObj : newLayer.objects) {
+                for (const auto& oldObj : oldLayer.objects) {
+                    const bool match = (!newObj.fixtureId.isEmpty() && newObj.fixtureId == oldObj.fixtureId)
+                                       || newObj.name == oldObj.name;
+                    if (!match) continue;
+                    newObj.enabled     = oldObj.enabled;
+                    newObj.trackerLink = oldObj.trackerLink;
+                    break;
+                }
+            }
+            break;
+        }
+    }
+}
+
+void MainWindow::commitMvrImport(MvrImport import, int replaceIndex, bool copyConfig)
+{
+    MvrImportData data = buildMvrImportData(import);
+
+    if (replaceIndex >= 0 && replaceIndex < mvrImports_.size()) {
+        if (copyConfig)
+            copyMvrConfig(import, data, mvrImports_[replaceIndex], project_.mvr.imports[replaceIndex]);
+        mvrImports_[replaceIndex]            = import;
+        project_.mvr.imports[replaceIndex]   = data;
+    } else {
+        mvrImports_.append(import);
+        project_.mvr.imports.append(data);
+    }
+
+    stage3DPanel_->setMvrImports(mvrImports_);
+    stageItemsPanel_->setMvrImports(mvrImports_);
+    fixturesPanel_->setData(project_.mvr.imports, project_.trackers);
+    dmxMonitorPanel_->setMvrImports(project_.mvr.imports);
     markDirty();
 }

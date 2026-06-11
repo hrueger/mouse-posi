@@ -5,6 +5,7 @@
 class QTabWidget;
 class NetworkSettingsPanel;
 class InputAdaptersPanel;
+class DmxUniversesPanel;
 class ModeSelectionWidget;
 class StreamSourcePanel;
 
@@ -15,16 +16,19 @@ public:
 
     void setNetworkConfig(const NetworkConfig& cfg);
     void setInputAdapters(const QList<InputAdapterConfig>& adapters);
+    void setDmxUniverses(const QList<DmxUniverseEntry>& universes);
     void setOperatingMode(OperatingMode mode);
     void setStreamSourcePanel(StreamSourcePanel* panel); // takes ownership for display
 
     void showModeTab();
     void showNetworkTab();
     void showAdaptersTab();
+    void showDmxTab();
 
 signals:
     void networkConfigChanged(NetworkConfig cfg);
     void inputAdaptersChanged(QList<InputAdapterConfig> adapters);
+    void dmxUniversesChanged(QList<DmxUniverseEntry> universes);
     void operatingModeChanged(OperatingMode mode);
 
 private:
@@ -33,5 +37,6 @@ private:
     StreamSourcePanel*    streamPanel_ = nullptr;
     NetworkSettingsPanel* networkPanel_;
     InputAdaptersPanel*   adaptersPanel_;
+    DmxUniversesPanel*    dmxUniversesPanel_;
     int                   streamTabIndex_ = -1;
 };

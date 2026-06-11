@@ -46,6 +46,7 @@ class WelcomeScreen;
 class SettingsDialog;
 class FixturesPanel;
 class GdtfLibraryDialog;
+class DmxMonitorPanel;
 namespace oclero { namespace qlementine { class ThemeManager; } }
 
 class MainWindow : public QMainWindow {
@@ -118,6 +119,7 @@ private:
 
     void openGdtfLibrary();
     void onAssignGdtf(int importIdx, int layerIdx, int objIdx);
+    void commitMvrImport(MvrImport import, int replaceIndex, bool copyConfig);
 
     VideoWidget*          video_;
     TrackersPanel*        trackersPanel_;
@@ -130,6 +132,7 @@ private:
     StageItemsPanel*         stageItemsPanel_;
     StagePropertiesPanel*    stagePropertiesPanel_;
     FixturesPanel*           fixturesPanel_;
+    DmxMonitorPanel*         dmxMonitorPanel_ = nullptr;
     SettingsDialog*          settingsDialog_;
     GdtfLibraryDialog*       gdtfLibraryDialog_ = nullptr;
 
@@ -142,6 +145,7 @@ private:
     QDockWidget* stageItemsDock_;
     QDockWidget* stagePropertiesDock_;
     QDockWidget* fixturesDock_;
+    QDockWidget* dmxMonitorDock_ = nullptr;
     QList<QDockWidget*> panelDocks_;
 
     NdiReceiver*  ndi_;
@@ -175,7 +179,6 @@ private:
     QLabel*       statusCalib_;
     QLabel*       statusSession_;
     QLabel*       statusPsnOut_;
-    QLabel*       statusSacnIn_;
     QProgressBar* saveLoadProgressBar_ = nullptr;
     QPushButton*  leaveSessionBtn_;
 
@@ -186,8 +189,6 @@ private:
     QList<MvrImport>   mvrImports_;
     QVector3D          cameraPos3D_;
     bool               camera3DValid_ = false;
-    qint64  sacnLastReceivedMs_ = -1;  // ms since epoch, -1 = never
-    QString sacnSourceName_;
 
     oclero::qlementine::ThemeManager* themeManager_ = nullptr;
     QString currentTheme_;

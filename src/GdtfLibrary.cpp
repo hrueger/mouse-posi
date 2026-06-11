@@ -156,6 +156,10 @@ GdtfDmxProfile GdtfLibrary::loadProfile(const QString& path, const QString& mode
         } else if (ch.attribute == QStringLiteral("Tilt")) {
             profile.tilt = { ch.coarse, ch.fine, ch.fine >= 0, ch.minDeg, ch.maxDeg };
         }
+        if (ch.coarse > 0)
+            profile.channelNames[ch.coarse] = ch.attribute;
+        if (ch.fine > 0)
+            profile.channelNames[ch.fine] = ch.attribute + " Fine";
     }
     profile.valid     = true;
     profile.footprint = mode.footprint;

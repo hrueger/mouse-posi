@@ -6,9 +6,7 @@
 #include <QRadioButton>
 #include <QLineEdit>
 #include <QSpinBox>
-#include <QDoubleSpinBox>
 #include <QComboBox>
-#include <QCheckBox>
 #include <QFrame>
 #include <QLabel>
 #include <QNetworkInterface>
@@ -85,83 +83,7 @@ NetworkSettingsPanel::NetworkSettingsPanel(QWidget* parent) : QWidget(parent) {
     portSpin_->setValue(56565);
     formLayout_->addRow("Port:", portSpin_);
     layout->addLayout(formLayout_);
-
-    layout->addWidget(makeSep());
-
-    // ── sACN input section ────────────────────────────────────────────────
-    auto* sacnHeader = new QLabel("sACN Input");
-    sacnHeader->setStyleSheet("font-weight: bold;");
-    layout->addWidget(sacnHeader);
-
-    sacnEnableCheck_ = new QCheckBox("Enable sACN input");
-    layout->addWidget(sacnEnableCheck_);
-
-    sacnModeMulticast_ = new QRadioButton("Multicast (E1.31)");
-    sacnModeUnicast_   = new QRadioButton("Unicast");
-    sacnModeMulticast_->setChecked(true);
-    sacnModeGroup_ = new QButtonGroup(this);
-    sacnModeGroup_->addButton(sacnModeMulticast_);
-    sacnModeGroup_->addButton(sacnModeUnicast_);
-    auto* sacnRadioRow = new QHBoxLayout;
-    sacnRadioRow->setContentsMargins(0, 0, 0, 0);
-    sacnRadioRow->setSpacing(4);
-    sacnRadioRow->addWidget(sacnModeMulticast_);
-    sacnRadioRow->addWidget(sacnModeUnicast_);
-    layout->addLayout(sacnRadioRow);
-
-    auto* sacnForm = new QFormLayout;
-    sacnForm->setContentsMargins(0, 2, 0, 0);
-    sacnForm->setSpacing(4);
-
-    sacnIfaceCombo_ = new QComboBox;
-    sacnIfaceCombo_->setMinimumContentsLength(0);
-    sacnIfaceCombo_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-
-    sacnUniverseSpin_ = new QSpinBox;
-    sacnUniverseSpin_->setRange(1, 63999);
-    sacnUniverseSpin_->setValue(1);
-
-    sacnAddressSpin_ = new QSpinBox;
-    sacnAddressSpin_->setRange(1, 512);
-    sacnAddressSpin_->setValue(1);
-
-    auto mkHeightSpin = [](double dflt) {
-        auto* s = new QDoubleSpinBox;
-        s->setRange(0.0, 99.0);
-        s->setDecimals(2);
-        s->setSingleStep(0.5);
-        s->setSuffix(" m");
-        s->setValue(dflt);
-        return s;
-    };
-    sacnMinSpin_ = mkHeightSpin(0.0);
-    sacnMaxSpin_ = mkHeightSpin(10.0);
-
-    sacnForm->addRow("Interface:", sacnIfaceCombo_);
-    sacnForm->addRow("Universe:",  sacnUniverseSpin_);
-    sacnForm->addRow("Address:",   sacnAddressSpin_);
-    sacnForm->addRow("Min height:", sacnMinSpin_);
-    sacnForm->addRow("Max height:", sacnMaxSpin_);
-    layout->addLayout(sacnForm);
     layout->addStretch();
-
-    // Populate sACN interface combo alongside PSN/session combos
-    auto populateSacnIface = [this]() {
-        sacnIfaceCombo_->clear();
-        sacnIfaceCombo_->addItem("(Default)", QString());
-        for (const auto& iface : QNetworkInterface::allInterfaces()) {
-            if (!iface.flags().testFlag(QNetworkInterface::IsUp)) continue;
-            QString ipv4;
-            for (const auto& entry : iface.addressEntries()) {
-                if (entry.ip().protocol() == QAbstractSocket::IPv4Protocol) {
-                    ipv4 = entry.ip().toString(); break;
-                }
-            }
-            if (ipv4.isEmpty()) continue;
-            sacnIfaceCombo_->addItem(iface.humanReadableName() + " — " + ipv4, iface.name());
-        }
-    };
-    populateSacnIface();
 
     populateInterfaces();
     updateIpFieldVisibility();
@@ -176,14 +98,6 @@ NetworkSettingsPanel::NetworkSettingsPanel(QWidget* parent) : QWidget(parent) {
     connect(portSpin_,        QOverload<int>::of(&QSpinBox::valueChanged), this, emitChange);
     connect(psnIfaceCombo_,     QOverload<int>::of(&QComboBox::currentIndexChanged), this, emitChange);
     connect(sessionIfaceCombo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, emitChange);
-    connect(sacnEnableCheck_,   &QCheckBox::toggled,     this, emitChange);
-    connect(sacnModeMulticast_, &QRadioButton::toggled,  this, emitChange);
-    connect(sacnModeUnicast_,   &QRadioButton::toggled,  this, emitChange);
-    connect(sacnIfaceCombo_,   QOverload<int>::of(&QComboBox::currentIndexChanged), this, emitChange);
-    connect(sacnUniverseSpin_, QOverload<int>::of(&QSpinBox::valueChanged),         this, emitChange);
-    connect(sacnAddressSpin_,  QOverload<int>::of(&QSpinBox::valueChanged),         this, emitChange);
-    connect(sacnMinSpin_,      QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, emitChange);
-    connect(sacnMaxSpin_,      QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, emitChange);
 }
 
 void NetworkSettingsPanel::populateInterfaces() {
@@ -221,17 +135,10 @@ void NetworkSettingsPanel::updateIpFieldVisibility() {
 }
 
 void NetworkSettingsPanel::setConfig(const NetworkConfig& cfg) {
-    // Block all child-widget signals while restoring state to suppress spurious
-    // configChanged emissions that would start/stop the receivers with partial config.
     const QSignalBlocker b1(multicastRadio_),   b2(unicastRadio_),   b3(broadcastRadio_);
     const QSignalBlocker b4(multicastIpEdit_),  b5(unicastIpEdit_),  b6(broadcastIpEdit_);
     const QSignalBlocker b7(portSpin_);
     const QSignalBlocker b8(psnIfaceCombo_),    b9(sessionIfaceCombo_);
-    const QSignalBlocker b10(sacnEnableCheck_);
-    const QSignalBlocker b11(sacnModeMulticast_), b12(sacnModeUnicast_);
-    const QSignalBlocker b13(sacnIfaceCombo_);
-    const QSignalBlocker b14(sacnUniverseSpin_), b15(sacnAddressSpin_);
-    const QSignalBlocker b16(sacnMinSpin_),      b17(sacnMaxSpin_);
 
     multicastRadio_->setChecked(cfg.psnMode == PsnMode::Multicast);
     unicastRadio_->setChecked(cfg.psnMode   == PsnMode::Unicast);
@@ -248,15 +155,6 @@ void NetworkSettingsPanel::setConfig(const NetworkConfig& cfg) {
     selectIface(psnIfaceCombo_, cfg.psnInterface);
     selectIface(sessionIfaceCombo_, cfg.sessionInterface);
 
-    sacnEnableCheck_->setChecked(cfg.sacnInput.enabled);
-    sacnModeMulticast_->setChecked(cfg.sacnInput.mode == SacnMode::Multicast);
-    sacnModeUnicast_->setChecked(cfg.sacnInput.mode   == SacnMode::Unicast);
-    selectIface(sacnIfaceCombo_, cfg.sacnInput.iface);
-    sacnUniverseSpin_->setValue(cfg.sacnInput.universe);
-    sacnAddressSpin_->setValue(cfg.sacnInput.address);
-    sacnMinSpin_->setValue(double(cfg.sacnInput.minHeight));
-    sacnMaxSpin_->setValue(double(cfg.sacnInput.maxHeight));
-
     updateIpFieldVisibility();
 }
 
@@ -271,13 +169,6 @@ NetworkConfig NetworkSettingsPanel::config() const {
     cfg.port             = static_cast<quint16>(portSpin_->value());
     cfg.psnInterface     = psnIfaceCombo_->currentData().toString();
     cfg.sessionInterface = sessionIfaceCombo_->currentData().toString();
-
-    cfg.sacnInput.enabled   = sacnEnableCheck_->isChecked();
-    cfg.sacnInput.mode      = sacnModeUnicast_->isChecked() ? SacnMode::Unicast : SacnMode::Multicast;
-    cfg.sacnInput.iface     = sacnIfaceCombo_->currentData().toString();
-    cfg.sacnInput.universe  = static_cast<quint16>(sacnUniverseSpin_->value());
-    cfg.sacnInput.address   = static_cast<quint16>(sacnAddressSpin_->value());
-    cfg.sacnInput.minHeight = float(sacnMinSpin_->value());
-    cfg.sacnInput.maxHeight = float(sacnMaxSpin_->value());
+    cfg.sacnInput        = {};  // legacy — not managed by this panel
     return cfg;
 }

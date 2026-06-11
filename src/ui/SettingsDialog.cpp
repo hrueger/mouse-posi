@@ -1,6 +1,7 @@
 #include "SettingsDialog.h"
 #include "NetworkSettingsPanel.h"
 #include "InputAdaptersPanel.h"
+#include "DmxUniversesPanel.h"
 #include "ModeSelectionWidget.h"
 #include "StreamSourcePanel.h"
 #include <QTabWidget>
@@ -32,10 +33,12 @@ SettingsDialog::SettingsDialog(QWidget* parent)
     modeScroll->setWidget(modeWidget_);
     tabs_->addTab(modeScroll, "Operating Mode");
 
-    networkPanel_  = new NetworkSettingsPanel;
-    adaptersPanel_ = new InputAdaptersPanel;
-    tabs_->addTab(networkPanel_,  "Network");
-    tabs_->addTab(adaptersPanel_, "Input Adapters");
+    networkPanel_      = new NetworkSettingsPanel;
+    adaptersPanel_     = new InputAdaptersPanel;
+    dmxUniversesPanel_ = new DmxUniversesPanel;
+    tabs_->addTab(networkPanel_,       "Network");
+    tabs_->addTab(adaptersPanel_,      "Input Adapters");
+    tabs_->addTab(dmxUniversesPanel_,  "DMX Universes");
 
     lay->addWidget(tabs_, 1);
 
@@ -49,6 +52,8 @@ SettingsDialog::SettingsDialog(QWidget* parent)
             this, &SettingsDialog::networkConfigChanged);
     connect(adaptersPanel_, &InputAdaptersPanel::adaptersChanged,
             this, &SettingsDialog::inputAdaptersChanged);
+    connect(dmxUniversesPanel_, &DmxUniversesPanel::dmxUniversesChanged,
+            this, &SettingsDialog::dmxUniversesChanged);
 }
 
 void SettingsDialog::setNetworkConfig(const NetworkConfig& cfg) {
@@ -57,6 +62,10 @@ void SettingsDialog::setNetworkConfig(const NetworkConfig& cfg) {
 
 void SettingsDialog::setInputAdapters(const QList<InputAdapterConfig>& adapters) {
     adaptersPanel_->setAdapters(adapters);
+}
+
+void SettingsDialog::setDmxUniverses(const QList<DmxUniverseEntry>& universes) {
+    dmxUniversesPanel_->setUniverses(universes);
 }
 
 void SettingsDialog::setOperatingMode(OperatingMode mode) {
@@ -96,6 +105,16 @@ void SettingsDialog::showNetworkTab() {
 void SettingsDialog::showAdaptersTab() {
     for (int i = 0; i < tabs_->count(); ++i) {
         if (tabs_->tabText(i) == QLatin1String("Input Adapters")) {
+            tabs_->setCurrentIndex(i);
+            break;
+        }
+    }
+    show(); raise(); activateWindow();
+}
+
+void SettingsDialog::showDmxTab() {
+    for (int i = 0; i < tabs_->count(); ++i) {
+        if (tabs_->tabText(i) == QLatin1String("DMX Universes")) {
             tabs_->setCurrentIndex(i);
             break;
         }

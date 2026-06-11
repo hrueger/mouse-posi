@@ -5,6 +5,7 @@
 #include <QList>
 #include <QVector>
 #include <QColor>
+#include <functional>
 #include "Project.h"
 
 // ─── Legacy fixture-only structure (kept for old callers) ─────────────────────
@@ -73,13 +74,17 @@ public:
     };
     static Result import(const QString& filePath);
 
-    // Full parse: layer → object hierarchy with optional GLB geometry
+    // Full parse: layer → object hierarchy with optional GLB geometry.
+    // tickCb (optional) is called after each scene object — use it to call
+    // QCoreApplication::processEvents so the UI stays responsive.
     struct ParseResult {
         QList<MvrLayer> layers;
         QString         error;
     };
-    static ParseResult parse(const QString& filePath);
-    static ParseResult parseFromData(const QByteArray& data); // write to temp file, then parse
+    static ParseResult parse(const QString& filePath,
+                             std::function<void()> tickCb = {});
+    static ParseResult parseFromData(const QByteArray& data,
+                                     std::function<void()> tickCb = {});
 
     // Load 3D meshes directly from a standalone GDTF file (no MVR scene context)
     static QVector<MvrMesh> loadGdtfMeshes(const QString& gdtfPath);

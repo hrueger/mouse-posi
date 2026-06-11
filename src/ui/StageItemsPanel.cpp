@@ -7,6 +7,29 @@
 #include <QToolButton>
 #include <QMenu>
 #include <QLineEdit>
+#include <QPainter>
+#include <QPixmap>
+
+static QIcon fixtureIcon()
+{
+    static QIcon icon;
+    if (!icon.isNull()) return icon;
+    QPixmap pm(14, 14);
+    pm.fill(Qt::transparent);
+    QPainter p(&pm);
+    p.setRenderHint(QPainter::Antialiasing);
+    // body
+    p.setPen(QPen(QColor(180, 110, 0), 0.8));
+    p.setBrush(QColor(255, 185, 40));
+    p.drawEllipse(QRectF(1.5, 1.5, 11, 11));
+    // lens highlight
+    p.setPen(Qt::NoPen);
+    p.setBrush(QColor(255, 240, 170, 190));
+    p.drawEllipse(QRectF(4, 3, 4, 4));
+    p.end();
+    icon = QIcon(pm);
+    return icon;
+}
 
 static constexpr int COL_NAME = 0;
 static constexpr int COL_TYPE = 1;
@@ -356,6 +379,7 @@ void StageItemsPanel::rebuildTree()
             layerItem->setCheckState(COL_3D, layer.enabled ? Qt::Checked : Qt::Unchecked);
             layerItem->setExpanded(false);
 
+            bool layerHasFixture = false;
             for (int oi = 0; oi < layer.objects.size(); ++oi) {
                 const MvrObject& obj = layer.objects[oi];
                 auto* objItem = new QTreeWidgetItem(layerItem);
@@ -378,7 +402,15 @@ void StageItemsPanel::rebuildTree()
                 objItem->setData(COL_NAME, RoleTypeStr,   typeStr);
                 objItem->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemIsUserCheckable);
                 objItem->setCheckState(COL_3D, obj.enabled ? Qt::Checked : Qt::Unchecked);
+
+                if (obj.type == MvrObject::Type::Fixture) {
+                    objItem->setIcon(COL_NAME, fixtureIcon());
+                    layerHasFixture = true;
+                }
             }
+
+            if (layerHasFixture)
+                layerItem->setIcon(COL_NAME, fixtureIcon());
         }
     }
 

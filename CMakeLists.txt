@@ -120,6 +120,8 @@ set(SOURCES
     src/ui/GdtfShareDialog.cpp
     src/ui/GdtfMeshPreview.cpp
     src/ui/NewProjectWizard.cpp
+    src/ui/DmxUniversesPanel.cpp
+    src/ui/DmxMonitorPanel.cpp
     src/GdtfLibrary.cpp
     # Session management
     src/SessionManager.cpp
@@ -168,6 +170,8 @@ set(HEADERS
     src/ui/GdtfShareDialog.h
     src/ui/GdtfMeshPreview.h
     src/ui/NewProjectWizard.h
+    src/ui/DmxUniversesPanel.h
+    src/ui/DmxMonitorPanel.h
     src/GdtfLibrary.h
     src/SessionManager.h
 )

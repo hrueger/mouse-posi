@@ -8,6 +8,7 @@
 #include <QLabel>
 #include <QColor>
 #include <QPushButton>
+#include <QComboBox>
 
 // ── Columns ───────────────────────────────────────────────────────────────────
 // Both modes:  ColName | ColFid | ...
@@ -341,16 +342,43 @@ void FixturesPanel::rebuild() {
                             QString("%1.%2").arg(obj.universe).arg(obj.dmxAddress),
                             (obj.universe - 1) * 512 + obj.dmxAddress));
 
-                    QString trackerName = "—";
-                    if (obj.trackerLink >= 0) {
-                        for (const auto& t : trackers_)
-                            if (t.id == obj.trackerLink) { trackerName = t.name; break; }
-                        if (trackerName == "—")
-                            trackerName = QString("T%1").arg(obj.trackerLink);
+                    // Tracker column: combo box for inline assignment
+                    auto* trackerCombo = new QComboBox;
+                    trackerCombo->addItem(QStringLiteral("—"), -1);
+                    for (const auto& t : trackers_)
+                        trackerCombo->addItem(t.name, t.id);
+                    for (int ci = 0; ci < trackerCombo->count(); ++ci) {
+                        if (trackerCombo->itemData(ci).toInt() == obj.trackerLink) {
+                            trackerCombo->setCurrentIndex(ci); break;
+                        }
                     }
-                    table_->setItem(row, ColTracker, makeItem(trackerName));
-                    table_->setItem(row, ColPan,     makeItem("—"));
-                    table_->setItem(row, ColTilt,    makeItem("—"));
+                    connect(trackerCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+                        this, [this, ii, li, oi](int) {
+                            if (rebuilding_) return;
+                            auto* combo = qobject_cast<QComboBox*>(sender());
+                            if (!combo) return;
+                            const int trackerId = combo->currentData().toInt();
+                            imports_[ii].layers[li].objects[oi].trackerLink = trackerId;
+                            emit trackerLinkChanged(ii, li, oi, trackerId);
+                            applyStatus();
+                        });
+                    // Underlying item used as sort key
+                    {
+                        const QString name = obj.trackerLink >= 0
+                            ? [&]() -> QString {
+                                for (const auto& t : trackers_)
+                                    if (t.id == obj.trackerLink) return t.name;
+                                return QString("T%1").arg(obj.trackerLink);
+                            }() : QString("—");
+                        auto* sortItem = new QTableWidgetItem(name);
+                        sortItem->setFlags(Qt::ItemIsEnabled);
+                        table_->setItem(row, ColTracker, sortItem);
+                    }
+                    table_->setCellWidget(row, ColTracker, trackerCombo);
+
+                    table_->setItem(row, ColPan,  makeItem("—"));
+                    table_->setItem(row, ColTilt, makeItem("—"));
+                    table_->setRowHeight(row, 26);
 
                     // Status column: QLabel with optional clickable link
                     auto* lbl = new QLabel;

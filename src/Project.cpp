@@ -339,6 +339,157 @@ static InputAdapterConfig jsonToInputAdapterConfig(const QJsonObject& o) {
     return cfg;
 }
 
+// ─── DmxUniverseEntry serialization ──────────────────────────────────────────
+
+static QString dmxUniverseRoleToString(DmxUniverseRole r) {
+    switch (r) {
+    case DmxUniverseRole::InControl:  return QStringLiteral("inControl");
+    case DmxUniverseRole::InFixtures: return QStringLiteral("inFixtures");
+    default:                          return QStringLiteral("outFixtures");
+    }
+}
+static DmxUniverseRole stringToDmxUniverseRole(const QString& s) {
+    if (s == QStringLiteral("inControl"))  return DmxUniverseRole::InControl;
+    if (s == QStringLiteral("inFixtures")) return DmxUniverseRole::InFixtures;
+    return DmxUniverseRole::OutFixtures;
+}
+
+static QJsonObject dmxChannelMappingToJson(const DmxChannelMapping& m) {
+    QJsonObject o;
+    o["channel"]  = m.channel;
+    o["target"]   = m.target;
+    o["minValue"] = double(m.minValue);
+    o["maxValue"] = double(m.maxValue);
+    return o;
+}
+static DmxChannelMapping jsonToDmxChannelMapping(const QJsonObject& o) {
+    DmxChannelMapping m;
+    m.channel  = static_cast<quint16>(o["channel"].toInt(1));
+    m.target   = o["target"].toString();
+    m.minValue = float(o["minValue"].toDouble(0.0));
+    m.maxValue = float(o["maxValue"].toDouble(10.0));
+    return m;
+}
+
+static QJsonObject dmxUniverseEntryToJson(const DmxUniverseEntry& e) {
+    QJsonObject o;
+    o["name"]      = e.name;
+    o["number"]    = e.number;
+    o["role"]      = dmxUniverseRoleToString(e.role);
+    o["protocol"]  = dmxProtocolToString(e.protocol);
+    o["netMode"]   = dmxNetModeToString(e.netMode);
+    o["iface"]     = e.iface;
+    o["unicastIp"] = e.unicastIp;
+    o["enabled"]   = e.enabled;
+    o["mergeFromUniverse"] = e.mergeFromUniverse;
+    QJsonArray mappings;
+    for (const auto& m : e.mappings) mappings.append(dmxChannelMappingToJson(m));
+    o["mappings"] = mappings;
+    return o;
+}
+static DmxUniverseEntry jsonToDmxUniverseEntry(const QJsonObject& o) {
+    DmxUniverseEntry e;
+    e.name      = o["name"].toString();
+    e.number    = static_cast<quint16>(o["number"].toInt(1));
+    e.role      = stringToDmxUniverseRole(o["role"].toString());
+    e.protocol  = stringToDmxProtocol(o["protocol"].toString());
+    e.netMode   = stringToDmxNetMode(o["netMode"].toString());
+    e.iface     = o["iface"].toString();
+    e.unicastIp = o["unicastIp"].toString();
+    e.enabled   = o["enabled"].toBool(true);
+    e.mergeFromUniverse = o["mergeFromUniverse"].toInt(-1);
+    for (const auto& v : o["mappings"].toArray())
+        e.mappings.append(jsonToDmxChannelMapping(v.toObject()));
+    return e;
+}
+
+static void migrateLegacyDmxToUniverses(Project& p) {
+    // Migrate old DmxOutputConfig.inputs → InFixtures entries
+    for (const auto& u : p.dmxOutput.inputs) {
+        DmxUniverseEntry e;
+        e.name      = QString("Console Input (U%1)").arg(u.universe);
+        e.number    = u.universe;
+        e.role      = DmxUniverseRole::InFixtures;
+        e.protocol  = u.protocol;
+        e.netMode   = u.netMode;
+        e.iface     = u.iface;
+        e.unicastIp = u.unicastIp;
+        p.dmxUniverses.append(e);
+    }
+
+    // Migrate old DmxOutputConfig.outputs → OutFixtures entries
+    for (const auto& u : p.dmxOutput.outputs) {
+        DmxUniverseEntry e;
+        e.name   = QString("Fixture Output (U%1)").arg(u.universe);
+        e.number = u.universe;
+        e.role   = DmxUniverseRole::OutFixtures;
+        e.protocol  = u.protocol;
+        e.netMode   = u.netMode;
+        e.iface     = u.iface;
+        e.unicastIp = u.unicastIp;
+        // If replacement mode and there's a matching InFixtures entry, link it
+        if (p.dmxOutput.outputMode == DmxOutputMode::Replacement) {
+            for (const auto& in : p.dmxOutput.inputs) {
+                if (in.universe == u.universe) {
+                    e.mergeFromUniverse = in.universe;
+                    break;
+                }
+            }
+        }
+        p.dmxUniverses.append(e);
+    }
+
+    // Migrate sACN/ArtNet InputAdapters → InControl entries (one per unique universe)
+    for (const auto& cfg : p.inputAdapters) {
+        if (cfg.type != InputAdapterType::SacnArtNet) continue;
+        // Collect unique universes from mappings
+        QMap<quint16, QList<InputAdapterMapping>> byUniverse;
+        for (const auto& m : cfg.mappings)
+            byUniverse[m.universe].append(m);
+        for (auto it = byUniverse.constBegin(); it != byUniverse.constEnd(); ++it) {
+            DmxUniverseEntry e;
+            e.name      = QString("Stage Control In (U%1)").arg(it.key());
+            e.number    = it.key();
+            e.role      = DmxUniverseRole::InControl;
+            e.protocol  = cfg.protocol;
+            e.netMode   = cfg.netMode;
+            e.iface     = cfg.iface;
+            e.unicastIp = cfg.unicastIp;
+            e.enabled   = cfg.enabled;
+            for (const auto& m : it.value()) {
+                DmxChannelMapping cm;
+                cm.channel  = m.channel;
+                cm.target   = m.target;
+                cm.minValue = m.minValue;
+                cm.maxValue = m.maxValue;
+                e.mappings.append(cm);
+            }
+            p.dmxUniverses.append(e);
+        }
+    }
+
+    // Migrate legacy network.sacnInput (only if no sACN adapter existed)
+    const bool hadSacnAdapters = std::any_of(p.inputAdapters.begin(), p.inputAdapters.end(),
+        [](const InputAdapterConfig& c) { return c.type == InputAdapterType::SacnArtNet; });
+    const auto& sacn = p.network.sacnInput;
+    if (sacn.enabled && !hadSacnAdapters) {
+        DmxUniverseEntry e;
+        e.name    = QString("Stage Control In (U%1)").arg(sacn.universe);
+        e.number  = sacn.universe;
+        e.role    = DmxUniverseRole::InControl;
+        e.protocol = DmxProtocol::SACN;
+        e.netMode  = sacn.mode == SacnMode::Unicast ? DmxNetworkMode::Unicast : DmxNetworkMode::Multicast;
+        e.iface    = sacn.iface;
+        DmxChannelMapping cm;
+        cm.channel  = sacn.address;
+        cm.target   = QStringLiteral("clickPlaneHeight");
+        cm.minValue = sacn.minHeight;
+        cm.maxValue = sacn.maxHeight;
+        e.mappings.append(cm);
+        p.dmxUniverses.append(e);
+    }
+}
+
 static QString operatingModeToString(OperatingMode m) {
     switch (m) {
     case OperatingMode::Camera2D:   return QStringLiteral("camera2d");
@@ -545,6 +696,13 @@ Project Project::load(const QString& path)
     for (const auto& v : root["inputAdapters"].toArray())
         p.inputAdapters.append(jsonToInputAdapterConfig(v.toObject()));
 
+    if (root.contains("dmxUniverses")) {
+        for (const auto& v : root["dmxUniverses"].toArray())
+            p.dmxUniverses.append(jsonToDmxUniverseEntry(v.toObject()));
+    } else {
+        migrateLegacyDmxToUniverses(p);
+    }
+
     return p;
 }
 
@@ -664,11 +822,15 @@ void Project::save(const QString& path, std::function<void(int)> progressCb) con
     root["mvr"] = mvrJson;
 
     root["operatingMode"] = operatingModeToString(operatingMode);
-    root["dmxOutput"]     = dmxOutputConfigToJson(dmxOutput);
+    root["dmxOutput"]     = dmxOutputConfigToJson(dmxOutput);   // kept for backward compat
     root["camera2DCalib"] = camera2DCalibToJson(camera2DCalib);
     QJsonArray adaptersArr;
     for (const auto& a : inputAdapters) adaptersArr.append(inputAdapterConfigToJson(a));
-    root["inputAdapters"] = adaptersArr;
+    root["inputAdapters"] = adaptersArr;                         // kept for backward compat
+
+    QJsonArray univArr;
+    for (const auto& e : dmxUniverses) univArr.append(dmxUniverseEntryToJson(e));
+    root["dmxUniverses"] = univArr;
 
     const QByteArray jsonBytes = QJsonDocument(root).toJson(QJsonDocument::Compact);
 

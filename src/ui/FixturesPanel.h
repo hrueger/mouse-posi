@@ -30,6 +30,7 @@ public:
 signals:
     void gdtfAssignRequested(int importIdx, int layerIdx, int objIdx);
     void dmxAddressChanged(int importIdx, int layerIdx, int objIdx, int universe, int address);
+    void trackerLinkChanged(int importIdx, int layerIdx, int objIdx, int trackerLinkId);
 
 private:
     enum class DisplayMode { Physical, Dmx };
