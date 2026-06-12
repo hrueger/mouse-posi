@@ -118,28 +118,45 @@ struct DmxOutputConfig {
     QList<DmxUniverseConfig> inputs;   // replacement mode: source universes (keyed by universe #)
 };
 
-// ─── Unified DMX Universe system ─────────────────────────────────────────────
+// ─── Fixture Universe routing ─────────────────────────────────────────────────
+// One entry per distinct universe found in MVR fixture data.
+// Controls how OnPoint receives (input side) and sends (output side) for that universe.
 
-enum class DmxUniverseRole { InControl, InFixtures, OutFixtures };
+struct FixtureUniverseConfig {
+    quint16 fixtureUniverse = 1;     // universe number from MVR fixture patch
 
-struct DmxChannelMapping {
-    quint16 channel  = 1;
-    QString target;       // "clickPlaneHeight", "dimmer", "zoom", "iris", "focus"
-    float   minValue = 0.f;
-    float   maxValue = 10.f;
+    bool    hasFollowSpots  = false; // OnPoint computes and sends pan/tilt for fixtures here
+
+    // Input side — how OnPoint receives the console's full DMX frame (for pass-through merge)
+    bool           inputEnabled  = true;
+    DmxProtocol    inputProtocol = DmxProtocol::SACN;
+    DmxNetworkMode inputNetMode  = DmxNetworkMode::Multicast;
+    QString        inputIface;
+    QString        inputUnicastIp;
+
+    // Output routing — where pan/tilt values are sent
+    int  outputUniverse = -1;        // -1 = same as fixtureUniverse; >= 0 = route to this universe
+
+    // Output side network settings
+    bool           outputEnabled  = true;
+    DmxProtocol    outputProtocol = DmxProtocol::SACN;
+    DmxNetworkMode outputNetMode  = DmxNetworkMode::Multicast;
+    QString        outputIface;
+    QString        outputUnicastIp;
+    int            outputPriority = 100; // sACN priority (0–200)
 };
 
+// Internal runtime-only type — synthesized from FixtureUniverseConfig, never stored
+enum class DmxUniverseRole { InFixtures, OutFixtures };
+
 struct DmxUniverseEntry {
-    QString          name;
     quint16          number   = 1;
     DmxUniverseRole  role     = DmxUniverseRole::OutFixtures;
     DmxProtocol      protocol = DmxProtocol::SACN;
     DmxNetworkMode   netMode  = DmxNetworkMode::Multicast;
     QString          iface;
     QString          unicastIp;
-    bool             enabled  = true;
-    QList<DmxChannelMapping> mappings;       // only for role == InControl
-    int  mergeFromUniverse = -1;             // only for role == OutFixtures; -1 = none
+    int  mergeFromUniverse = -1;  // only for OutFixtures; -1 = none
 };
 
 // ─── GDTF DMX profile (pan/tilt channel info extracted from GDTF) ────────────
@@ -270,8 +287,8 @@ struct Project {
     OperatingMode             operatingMode  = OperatingMode::Stage3DPSN;
     DmxOutputConfig           dmxOutput;
     Camera2DCalibration       camera2DCalib;
-    QList<InputAdapterConfig> inputAdapters;
-    QList<DmxUniverseEntry>   dmxUniverses;
+    QList<InputAdapterConfig>      inputAdapters;
+    QList<FixtureUniverseConfig>   fixtureUniverseConfigs;
 
     static Project   load(const QString& path);
     void             save(const QString& path,

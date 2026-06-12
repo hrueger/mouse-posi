@@ -5,7 +5,7 @@
 class QTabWidget;
 class NetworkSettingsPanel;
 class InputAdaptersPanel;
-class DmxUniversesPanel;
+class FixtureUniversesPanel;
 class ModeSelectionWidget;
 class StreamSourcePanel;
 
@@ -16,9 +16,10 @@ public:
 
     void setNetworkConfig(const NetworkConfig& cfg);
     void setInputAdapters(const QList<InputAdapterConfig>& adapters);
-    void setDmxUniverses(const QList<DmxUniverseEntry>& universes);
+    void setFixtureUniverseConfigs(const QList<FixtureUniverseConfig>& configs);
     void setOperatingMode(OperatingMode mode);
     void setStreamSourcePanel(StreamSourcePanel* panel); // takes ownership for display
+    void setMvrData(const MvrSettings& mvr);
 
     void showModeTab();
     void showNetworkTab();
@@ -28,15 +29,15 @@ public:
 signals:
     void networkConfigChanged(NetworkConfig cfg);
     void inputAdaptersChanged(QList<InputAdapterConfig> adapters);
-    void dmxUniversesChanged(QList<DmxUniverseEntry> universes);
+    void fixtureUniverseConfigsChanged(QList<FixtureUniverseConfig> configs);
     void operatingModeChanged(OperatingMode mode);
 
 private:
-    QTabWidget*           tabs_;
-    ModeSelectionWidget*  modeWidget_;
-    StreamSourcePanel*    streamPanel_ = nullptr;
-    NetworkSettingsPanel* networkPanel_;
-    InputAdaptersPanel*   adaptersPanel_;
-    DmxUniversesPanel*    dmxUniversesPanel_;
-    int                   streamTabIndex_ = -1;
+    QTabWidget*            tabs_;
+    ModeSelectionWidget*   modeWidget_;
+    StreamSourcePanel*     streamPanel_ = nullptr;
+    NetworkSettingsPanel*  networkPanel_;
+    InputAdaptersPanel*    adaptersPanel_;
+    FixtureUniversesPanel* fixtureUniversesPanel_;
+    int                    streamTabIndex_ = -1;
 };

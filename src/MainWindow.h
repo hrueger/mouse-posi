@@ -120,6 +120,7 @@ private:
     void openGdtfLibrary();
     void onAssignGdtf(int importIdx, int layerIdx, int objIdx);
     void commitMvrImport(MvrImport import, int replaceIndex, bool copyConfig);
+    void syncFixtureUniverseConfigs();
 
     VideoWidget*          video_;
     TrackersPanel*        trackersPanel_;
@@ -157,7 +158,8 @@ private:
     QThread*      sacnThread_  = nullptr;
     DmxSender*    dmxSender_   = nullptr;
     DmxReceiver*  dmxReceiver_ = nullptr;
-    QList<InputAdapterBase*> inputAdapters_;
+    QList<InputAdapterBase*>  inputAdapters_;
+    QList<DmxUniverseEntry>   effectiveDmxUniverses_; // synthesized from fixtureUniverseConfigs
     SessionManager* sessionMgr_;
     QTimer        timer_;
     QTimer        statsTimer_;

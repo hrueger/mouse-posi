@@ -291,10 +291,10 @@ void FixturesPanel::rebuild() {
         hdr->setSectionResizeMode(ColStatus,   QHeaderView::Fixed);
         table_->setColumnWidth(ColFid,      50);
         table_->setColumnWidth(ColAddrText, 72);
-        table_->setColumnWidth(ColTracker,  100);
-        table_->setColumnWidth(ColPan,       90);
-        table_->setColumnWidth(ColTilt,      90);
-        table_->setColumnWidth(ColStatus,   110);
+        table_->setColumnWidth(ColTracker, 130);
+        table_->setColumnWidth(ColPan,      90);
+        table_->setColumnWidth(ColTilt,     90);
+        table_->setColumnWidth(ColStatus,  110);
 
         table_->setColumnHidden(ColFid,      false);
         table_->setColumnHidden(ColAddrText, false);
@@ -344,6 +344,7 @@ void FixturesPanel::rebuild() {
 
                     // Tracker column: combo box for inline assignment
                     auto* trackerCombo = new QComboBox;
+                    trackerCombo->setMaximumWidth(128);
                     trackerCombo->addItem(QStringLiteral("—"), -1);
                     for (const auto& t : trackers_)
                         trackerCombo->addItem(t.name, t.id);

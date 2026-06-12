@@ -1,4 +1,5 @@
 #include "DmxMonitorPanel.h"
+#include <algorithm>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QComboBox>
@@ -112,19 +113,14 @@ protected:
                 p.fillRect(cell, QColor(255, 255, 255, 22));
 
             // ── Grid line ─────────────────────────────────────────────────────
-            p.setPen(QPen(computed ? computedBorder
-                                   : (patched ? midColor : midColor.darker(115)), 1));
+            p.setPen(QPen(patched ? midColor : midColor.darker(115), 1));
             p.drawRect(cell.adjusted(0, 0, -1, -1));
 
             // ── Fixture top line ──────────────────────────────────────────────
             if (patched) {
-                p.fillRect(QRect(cell.left(), cell.top(), cell.width(), LINE_H),
-                           fixtureLineColor(fixName));
-                // Extra border highlight for computed channels
-                if (computed) {
-                    p.setPen(QPen(computedBorder, 2));
-                    p.drawRect(cell.adjusted(1, 1, -1, -1));
-                }
+                const int lineH = computed ? LINE_H * 2 : LINE_H;
+                p.fillRect(QRect(cell.left(), cell.top(), cell.width(), lineH),
+                           computed ? computedBorder : fixtureLineColor(fixName));
             }
 
             // ── Channel number ────────────────────────────────────────────────
@@ -284,6 +280,13 @@ DmxMonitorPanel::DmxMonitorPanel(QWidget* parent) : QWidget(parent) {
 
 void DmxMonitorPanel::setUniverses(const QList<DmxUniverseEntry>& universes) {
     universes_ = universes;
+    outFrames_.clear();
+    inFrames_.clear();
+    std::stable_sort(universes_.begin(), universes_.end(),
+        [](const DmxUniverseEntry& a, const DmxUniverseEntry& b) {
+            if (a.number != b.number) return a.number < b.number;
+            return int(a.role) < int(b.role); // IN before OUT for same number
+        });
     rebuildCombo();
 }
 
@@ -301,11 +304,9 @@ void DmxMonitorPanel::rebuildCombo() {
 
     universeCombo_->clear();
     for (const auto& e : universes_) {
-        const QString prefix =
-            (e.role == DmxUniverseRole::OutFixtures) ? "[OUT]" :
-            (e.role == DmxUniverseRole::InFixtures)  ? "[IN Fix]" : "[IN Ctrl]";
+        const QString prefix = (e.role == DmxUniverseRole::OutFixtures) ? "[OUT]" : "[IN]";
         universeCombo_->addItem(
-            QString("%1 %2 (U%3)").arg(prefix, e.name).arg(e.number),
+            QString("%1 U%2").arg(prefix).arg(e.number),
             int(e.number));
     }
 
@@ -319,6 +320,7 @@ void DmxMonitorPanel::rebuildCombo() {
 void DmxMonitorPanel::onUniverseSelected(int index) {
     if (index < 0 || index >= universes_.size()) {
         directionBadge_->setText("");
+        refreshValues();
         return;
     }
     const auto& e    = universes_[index];
@@ -390,7 +392,20 @@ void DmxMonitorPanel::updateInFrame(quint16 universe, const QByteArray& frame) {
 
 void DmxMonitorPanel::refreshValues() {
     int idx = universeCombo_->currentIndex();
-    if (idx < 0 || idx >= universes_.size()) return;
+    if (idx < 0 || idx >= universes_.size()) {
+        gridWidget_->setData(QByteArray(512, '\0'), {}, false);
+        if (stack_->currentIndex() == 0) {
+            const QSignalBlocker blocker(table_->model());
+            for (int i = 0; i < 512; ++i) {
+                if (auto* v = table_->item(i, 1)) { v->setText(QStringLiteral("0")); v->setForeground(QColor(Qt::gray)); }
+                if (auto* b = table_->item(i, 2)) { b->setData(Qt::UserRole, 0); }
+                if (auto* fi = table_->item(i, 3)) { fi->setText({}); fi->setForeground({}); }
+                if (auto* fn = table_->item(i, 4)) { fn->setText({}); fn->setForeground({}); }
+            }
+            table_->viewport()->update();
+        }
+        return;
+    }
 
     const auto&    e      = universes_[idx];
     const quint16  uni    = e.number;

@@ -1,7 +1,7 @@
 #include "SettingsDialog.h"
 #include "NetworkSettingsPanel.h"
 #include "InputAdaptersPanel.h"
-#include "DmxUniversesPanel.h"
+#include "FixtureUniversesPanel.h"
 #include "ModeSelectionWidget.h"
 #include "StreamSourcePanel.h"
 #include <QTabWidget>
@@ -33,12 +33,12 @@ SettingsDialog::SettingsDialog(QWidget* parent)
     modeScroll->setWidget(modeWidget_);
     tabs_->addTab(modeScroll, "Operating Mode");
 
-    networkPanel_      = new NetworkSettingsPanel;
-    adaptersPanel_     = new InputAdaptersPanel;
-    dmxUniversesPanel_ = new DmxUniversesPanel;
-    tabs_->addTab(networkPanel_,       "Network");
-    tabs_->addTab(adaptersPanel_,      "Input Adapters");
-    tabs_->addTab(dmxUniversesPanel_,  "DMX Universes");
+    networkPanel_          = new NetworkSettingsPanel;
+    adaptersPanel_         = new InputAdaptersPanel;
+    fixtureUniversesPanel_ = new FixtureUniversesPanel;
+    tabs_->addTab(networkPanel_,            "Network");
+    tabs_->addTab(adaptersPanel_,           "Input Adapters");
+    tabs_->addTab(fixtureUniversesPanel_,   "Fixture Universes");
 
     lay->addWidget(tabs_, 1);
 
@@ -52,8 +52,8 @@ SettingsDialog::SettingsDialog(QWidget* parent)
             this, &SettingsDialog::networkConfigChanged);
     connect(adaptersPanel_, &InputAdaptersPanel::adaptersChanged,
             this, &SettingsDialog::inputAdaptersChanged);
-    connect(dmxUniversesPanel_, &DmxUniversesPanel::dmxUniversesChanged,
-            this, &SettingsDialog::dmxUniversesChanged);
+    connect(fixtureUniversesPanel_, &FixtureUniversesPanel::fixtureUniverseConfigsChanged,
+            this, &SettingsDialog::fixtureUniverseConfigsChanged);
 }
 
 void SettingsDialog::setNetworkConfig(const NetworkConfig& cfg) {
@@ -64,8 +64,12 @@ void SettingsDialog::setInputAdapters(const QList<InputAdapterConfig>& adapters)
     adaptersPanel_->setAdapters(adapters);
 }
 
-void SettingsDialog::setDmxUniverses(const QList<DmxUniverseEntry>& universes) {
-    dmxUniversesPanel_->setUniverses(universes);
+void SettingsDialog::setFixtureUniverseConfigs(const QList<FixtureUniverseConfig>& configs) {
+    fixtureUniversesPanel_->setConfigs(configs);
+}
+
+void SettingsDialog::setMvrData(const MvrSettings& mvr) {
+    fixtureUniversesPanel_->setMvrData(mvr);
 }
 
 void SettingsDialog::setOperatingMode(OperatingMode mode) {
@@ -114,7 +118,7 @@ void SettingsDialog::showAdaptersTab() {
 
 void SettingsDialog::showDmxTab() {
     for (int i = 0; i < tabs_->count(); ++i) {
-        if (tabs_->tabText(i) == QLatin1String("DMX Universes")) {
+        if (tabs_->tabText(i) == QLatin1String("Fixture Universes")) {
             tabs_->setCurrentIndex(i);
             break;
         }

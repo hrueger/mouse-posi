@@ -464,8 +464,24 @@ MainWindow::MainWindow(NdiReceiver* ndi,
             mvrImports_.removeAt(ii);
             if (ii < project_.mvr.imports.size())
                 project_.mvr.imports.removeAt(ii);
+
+            // Remove fixtureUniverseConfigs for universes no longer present in any import
+            QSet<quint16> usedUnis;
+            for (const auto& imp : project_.mvr.imports)
+                for (const auto& layer : imp.layers)
+                    for (const auto& obj : layer.objects)
+                        if (obj.type == MvrObjectData::Type::Fixture)
+                            usedUnis.insert(quint16(obj.universe));
+            project_.fixtureUniverseConfigs.removeIf(
+                [&](const FixtureUniverseConfig& c){ return !usedUnis.contains(c.fixtureUniverse); });
+            settingsDialog_->setFixtureUniverseConfigs(project_.fixtureUniverseConfigs);
+            settingsDialog_->setMvrData(project_.mvr);
+            reconfigureDmxOutput();
+
             stage3DPanel_->setMvrImports(mvrImports_);
             stageItemsPanel_->setMvrImports(mvrImports_);
+            fixturesPanel_->setData(project_.mvr.imports, project_.trackers);
+            dmxMonitorPanel_->setMvrImports(project_.mvr.imports);
             stagePropertiesPanel_->setSelectedObject(-999);
             markDirty();
         }
@@ -550,6 +566,7 @@ MainWindow::MainWindow(NdiReceiver* ndi,
             if (objIdx < 0 || objIdx >= layer.objects.size()) return;
             layer.objects[objIdx].universe   = universe;
             layer.objects[objIdx].dmxAddress = address;
+            syncFixtureUniverseConfigs();
             markDirty();
         });
 
@@ -725,13 +742,10 @@ MainWindow::MainWindow(NdiReceiver* ndi,
         reconfigureInputAdapters();
         markDirty();
     });
-    connect(settingsDialog_, &SettingsDialog::dmxUniversesChanged,
-            this, [this](const QList<DmxUniverseEntry>& universes) {
-        project_.dmxUniverses = universes;
+    connect(settingsDialog_, &SettingsDialog::fixtureUniverseConfigsChanged,
+            this, [this](const QList<FixtureUniverseConfig>& configs) {
+        project_.fixtureUniverseConfigs = configs;
         reconfigureDmxOutput();
-        reconfigureInputAdapters();
-        if (dmxMonitorPanel_)
-            dmxMonitorPanel_->setUniverses(universes);
         markDirty();
     });
     connect(settingsDialog_, &SettingsDialog::operatingModeChanged, this, [this](OperatingMode mode) {
@@ -1395,7 +1409,8 @@ void MainWindow::applyProject() {
     trackerBar_->setTrackers(project_.trackers);
     settingsDialog_->setNetworkConfig(project_.network);
     settingsDialog_->setInputAdapters(project_.inputAdapters);
-    settingsDialog_->setDmxUniverses(project_.dmxUniverses);
+    settingsDialog_->setFixtureUniverseConfigs(project_.fixtureUniverseConfigs);
+    settingsDialog_->setMvrData(project_.mvr);
     settingsDialog_->setOperatingMode(project_.operatingMode);
     sessionPanel_->setSessionInterface(project_.network.sessionInterface);
     psnSender_->configure(project_.network);
@@ -1535,10 +1550,8 @@ void MainWindow::applyProject() {
     stage3DPanel_->setShowMvrLabels(project_.mvr.showLabels);
     stage3DPanel_->setMvrRenderMode(MvrRenderMode(int(project_.mvr.renderMode)));
     fixturesPanel_->setData(project_.mvr.imports, project_.trackers);
-    if (dmxMonitorPanel_) {
-        dmxMonitorPanel_->setUniverses(project_.dmxUniverses);
+    if (dmxMonitorPanel_)
         dmxMonitorPanel_->setMvrImports(project_.mvr.imports);
-    }
 
     updateCalibStatus();
     applyingProject_ = false;
@@ -1649,8 +1662,8 @@ void MainWindow::updateStatsTimer() {
             std::llround(double(dmxTotal - lastSacnRxPackets_) / elapsed)));
         lastSacnRxPackets_ = dmxTotal;
     }
-    const bool hasDmxControl = std::any_of(project_.dmxUniverses.begin(), project_.dmxUniverses.end(),
-        [](const DmxUniverseEntry& e){ return e.enabled && e.role == DmxUniverseRole::InControl; });
+    const bool hasDmxControl = std::any_of(project_.inputAdapters.begin(), project_.inputAdapters.end(),
+        [](const InputAdapterConfig& c){ return c.enabled && c.type == InputAdapterType::SacnArtNet; });
     statsPanel_->setSacnRxInfo(hasDmxControl, dmxRxRate, clickPlaneHeight_);
 
     if (txRate > 0) {
@@ -2059,20 +2072,54 @@ void MainWindow::reconfigureDmxOutput() {
 
     if (project_.operatingMode == OperatingMode::Stage3DPSN) return;
 
+    // Build effective universe lists from FixtureUniverseConfig
+    effectiveDmxUniverses_.clear();
     QList<DmxUniverseConfig> outConfigs, inConfigs;
-    for (const auto& e : project_.dmxUniverses) {
-        if (!e.enabled) continue;
-        DmxUniverseConfig uc;
-        uc.universe  = e.number;
-        uc.protocol  = e.protocol;
-        uc.netMode   = e.netMode;
-        uc.iface     = e.iface;
-        uc.unicastIp = e.unicastIp;
-        if (e.role == DmxUniverseRole::OutFixtures)
+
+    for (const auto& cfg : project_.fixtureUniverseConfigs) {
+        const quint16 outNum = (cfg.outputUniverse >= 0)
+            ? quint16(cfg.outputUniverse) : cfg.fixtureUniverse;
+
+        // InFixtures entry — always subscribe so the monitor can show all input universes
+        if (cfg.inputEnabled) {
+            DmxUniverseEntry in;
+            in.number    = cfg.fixtureUniverse;
+            in.role      = DmxUniverseRole::InFixtures;
+            in.protocol  = cfg.inputProtocol;
+            in.netMode   = cfg.inputNetMode;
+            in.iface     = cfg.inputIface;
+            in.unicastIp = cfg.inputUnicastIp;
+            effectiveDmxUniverses_.append(in);
+            DmxUniverseConfig uc;
+            uc.universe  = in.number;
+            uc.protocol  = in.protocol;
+            uc.netMode   = in.netMode;
+            uc.iface     = in.iface;
+            uc.unicastIp = in.unicastIp;
+            inConfigs.append(uc);
+        }
+
+        // OutFixtures entry — only for follow-spot universes (OnPoint sends pan/tilt)
+        if (cfg.hasFollowSpots && cfg.outputEnabled) {
+            DmxUniverseEntry out;
+            out.number            = outNum;
+            out.role              = DmxUniverseRole::OutFixtures;
+            out.protocol          = cfg.outputProtocol;
+            out.netMode           = cfg.outputNetMode;
+            out.iface             = cfg.outputIface;
+            out.unicastIp         = cfg.outputUnicastIp;
+            out.mergeFromUniverse = (cfg.outputUniverse >= 0) ? int(cfg.fixtureUniverse) : -1;
+            effectiveDmxUniverses_.append(out);
+            DmxUniverseConfig uc;
+            uc.universe  = out.number;
+            uc.protocol  = out.protocol;
+            uc.netMode   = out.netMode;
+            uc.iface     = out.iface;
+            uc.unicastIp = out.unicastIp;
             outConfigs.append(uc);
-        else
-            inConfigs.append(uc);  // InFixtures + InControl both receive
+        }
     }
+
     if (!outConfigs.isEmpty())
         dmxSender_->configure(outConfigs);
     if (!inConfigs.isEmpty()) {
@@ -2082,42 +2129,23 @@ void MainWindow::reconfigureDmxOutput() {
                     dmxMonitorPanel_, &DmxMonitorPanel::updateInFrame);
         }
     }
+
+    if (dmxMonitorPanel_)
+        dmxMonitorPanel_->setUniverses(effectiveDmxUniverses_);
 }
 
 void MainWindow::reconfigureInputAdapters() {
     for (auto* a : inputAdapters_) { a->stop(); a->deleteLater(); }
     inputAdapters_.clear();
 
-    // DMX InControl universes → SacnArtNetInputAdapter (one per entry)
-    for (const auto& e : project_.dmxUniverses) {
-        if (!e.enabled || e.role != DmxUniverseRole::InControl) continue;
-        InputAdapterConfig cfg;
-        cfg.type      = InputAdapterType::SacnArtNet;
-        cfg.protocol  = e.protocol;
-        cfg.netMode   = e.netMode;
-        cfg.iface     = e.iface;
-        cfg.unicastIp = e.unicastIp;
-        cfg.enabled   = true;
-        for (const auto& m : e.mappings) {
-            InputAdapterMapping im;
-            im.target   = m.target;
-            im.universe = e.number;
-            im.channel  = m.channel;
-            im.minValue = m.minValue;
-            im.maxValue = m.maxValue;
-            cfg.mappings.append(im);
-        }
-        auto* adapter = new SacnArtNetInputAdapter(cfg, this);
-        connect(adapter, &InputAdapterBase::clickPlaneHeightChanged,
-                this, [this](float h) { applyPlaneHeight(h); });
-        inputAdapters_.append(adapter);
-        adapter->start();
-    }
-
-    // MIDI adapters from project_.inputAdapters
     for (const auto& cfg : project_.inputAdapters) {
-        if (!cfg.enabled || cfg.type != InputAdapterType::Midi) continue;
-        auto* adapter = new MidiInputAdapter(cfg, this);
+        if (!cfg.enabled) continue;
+        InputAdapterBase* adapter = nullptr;
+        if (cfg.type == InputAdapterType::SacnArtNet)
+            adapter = new SacnArtNetInputAdapter(cfg, this);
+        else if (cfg.type == InputAdapterType::Midi)
+            adapter = new MidiInputAdapter(cfg, this);
+        if (!adapter) continue;
         connect(adapter, &InputAdapterBase::clickPlaneHeightChanged,
                 this, [this](float h) { applyPlaneHeight(h); });
         inputAdapters_.append(adapter);
@@ -2131,10 +2159,18 @@ void MainWindow::sendDmxForMode() {
     QList<FixtureRay> fixtureRays;
 
     auto getMergeUniverse = [&](quint16 outUni) -> int {
-        for (const auto& e : project_.dmxUniverses)
-            if (e.enabled && e.role == DmxUniverseRole::OutFixtures && e.number == outUni)
+        for (const auto& e : effectiveDmxUniverses_)
+            if (e.role == DmxUniverseRole::OutFixtures && e.number == outUni)
                 return e.mergeFromUniverse;
         return -1;
+    };
+
+    // Returns the effective output universe for a fixture, or 0 if not configured for follow-spots
+    auto resolveOutputUni = [&](quint16 fixtureUni) -> quint16 {
+        for (const auto& cfg : project_.fixtureUniverseConfigs)
+            if (cfg.fixtureUniverse == fixtureUni && cfg.hasFollowSpots)
+                return (cfg.outputUniverse >= 0) ? quint16(cfg.outputUniverse) : fixtureUni;
+        return 0; // 0 = not a follow-spot universe, skip
     };
     auto getFrame = [&](quint16 uni) -> QByteArray& {
         auto it = frames.find(uni);
@@ -2229,9 +2265,9 @@ void MainWindow::sendDmxForMode() {
                     st.panDmx  = pt.pan;
                     st.tiltDmx = pt.tilt;
 
-                    if (!std::any_of(project_.dmxUniverses.begin(), project_.dmxUniverses.end(),
-                            [](const DmxUniverseEntry& e){ return e.enabled && e.role == DmxUniverseRole::OutFixtures; })) continue;
-                    QByteArray& frame = getFrame(quint16(obj.universe));
+                    const quint16 outUni = resolveOutputUni(quint16(obj.universe));
+                    if (outUni == 0) continue; // not a follow-spot universe
+                    QByteArray& frame = getFrame(outUni);
                     if (frame.size() < 512) frame.resize(512, '\0');
                     const int baseAddr = obj.dmxAddress - 1;
                     writeChannel(frame, baseAddr, obj.gdtfProfile.pan,  pt.pan);
@@ -2269,9 +2305,9 @@ void MainWindow::sendDmxForMode() {
                         st.panDmx  = panVal;
                         st.tiltDmx = tiltVal;
 
-                        if (!std::any_of(project_.dmxUniverses.begin(), project_.dmxUniverses.end(),
-                            [](const DmxUniverseEntry& e){ return e.enabled && e.role == DmxUniverseRole::OutFixtures; })) continue;
-                        QByteArray& frame = getFrame(quint16(obj.universe));
+                        const quint16 outUni = resolveOutputUni(quint16(obj.universe));
+                        if (outUni == 0) continue; // not a follow-spot universe
+                        QByteArray& frame = getFrame(outUni);
                         if (frame.size() < 512) frame.resize(512, '\0');
                         const int baseAddr = obj.dmxAddress - 1;
                         writeChannel(frame, baseAddr, obj.gdtfProfile.pan,  panVal);
@@ -2285,8 +2321,9 @@ void MainWindow::sendDmxForMode() {
     fixturesPanel_->updateStatus(statusMap);
     stage3DPanel_->setFixtureRays(fixtureRays);
 
-    const bool hasOutputs = std::any_of(project_.dmxUniverses.begin(), project_.dmxUniverses.end(),
-        [](const DmxUniverseEntry& e){ return e.enabled && e.role == DmxUniverseRole::OutFixtures; });
+    const bool hasOutputs = std::any_of(
+        project_.fixtureUniverseConfigs.begin(), project_.fixtureUniverseConfigs.end(),
+        [](const FixtureUniverseConfig& c){ return c.hasFollowSpots && c.outputEnabled; });
     if (hasOutputs) {
         for (auto it = frames.constBegin(); it != frames.constEnd(); ++it) {
             dmxSender_->sendFrame(it.key(), it.value());
@@ -2467,6 +2504,36 @@ static void copyMvrConfig(MvrImport& newImport, MvrImportData& newData,
     }
 }
 
+void MainWindow::syncFixtureUniverseConfigs()
+{
+    // Collect every universe number currently referenced by any fixture
+    QSet<quint16> usedUnis;
+    for (const auto& imp : project_.mvr.imports)
+        for (const auto& layer : imp.layers)
+            for (const auto& obj : layer.objects)
+                if (obj.type == MvrObjectData::Type::Fixture)
+                    usedUnis.insert(quint16(obj.universe));
+
+    // Add entries for any new universes
+    for (quint16 uni : usedUnis) {
+        const bool exists = std::any_of(project_.fixtureUniverseConfigs.begin(),
+            project_.fixtureUniverseConfigs.end(),
+            [uni](const FixtureUniverseConfig& c){ return c.fixtureUniverse == uni; });
+        if (!exists) {
+            FixtureUniverseConfig cfg;
+            cfg.fixtureUniverse = uni;
+            project_.fixtureUniverseConfigs.append(cfg);
+        }
+    }
+
+    // Remove entries for universes no longer in use
+    project_.fixtureUniverseConfigs.removeIf(
+        [&](const FixtureUniverseConfig& c){ return !usedUnis.contains(c.fixtureUniverse); });
+
+    settingsDialog_->setFixtureUniverseConfigs(project_.fixtureUniverseConfigs);
+    reconfigureDmxOutput();
+}
+
 void MainWindow::commitMvrImport(MvrImport import, int replaceIndex, bool copyConfig)
 {
     MvrImportData data = buildMvrImportData(import);
@@ -2485,5 +2552,9 @@ void MainWindow::commitMvrImport(MvrImport import, int replaceIndex, bool copyCo
     stageItemsPanel_->setMvrImports(mvrImports_);
     fixturesPanel_->setData(project_.mvr.imports, project_.trackers);
     dmxMonitorPanel_->setMvrImports(project_.mvr.imports);
+
+    syncFixtureUniverseConfigs();
+    settingsDialog_->setMvrData(project_.mvr);
+
     markDirty();
 }
