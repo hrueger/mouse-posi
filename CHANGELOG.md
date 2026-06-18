@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.3.1] - 2026-06-18
+
+- Fixed PSN origin and rotation
+
 All notable changes to OnPoint are documented in this file.
 
 ## [0.3.0] - 2026-06-18
