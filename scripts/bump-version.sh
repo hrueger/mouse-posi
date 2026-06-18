@@ -85,8 +85,8 @@ ${notes}"
 if [[ -f "$CHANGELOG" ]]; then
   # Insert after the first line (the # Changelog heading)
   tmp_cl=$(mktemp)
-  awk -v entry="$changelog_entry" '
-    NR==1 { print; print ""; print entry; next }
+  CHANGELOG_ENTRY="$changelog_entry" awk '
+    NR==1 { print; print ""; print ENVIRON["CHANGELOG_ENTRY"]; next }
     { print }
   ' "$CHANGELOG" > "$tmp_cl"
   mv "$tmp_cl" "$CHANGELOG"
