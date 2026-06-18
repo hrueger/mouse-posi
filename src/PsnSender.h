@@ -32,6 +32,11 @@ private:
     quint16      port_      = 56565;
     PsnMode      psnMode_   = PsnMode::Multicast;
 
+    float psnOffsetX_ = 0.f;
+    float psnOffsetY_ = 0.f;
+    float psnOffsetZ_ = 0.f;
+    float psnRotDeg_  = 0.f;
+
     QString      systemName_;
 
     quint8  dataFrameId_ = 1;

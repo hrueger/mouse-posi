@@ -612,6 +612,7 @@ MainWindow::MainWindow(NdiReceiver* ndi,
         project_.network.psnOffsetY = offset.y();
         project_.network.psnOffsetZ = offset.z();
         project_.network.psnRotDeg  = rotDeg;
+        psnSender_->configure(project_.network);
         stage3DPanel_->setPsnOrigin(offset, rotDeg);
         video_->setPsnOrigin(offset, rotDeg);
         markDirty();

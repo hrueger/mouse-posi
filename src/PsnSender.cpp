@@ -124,8 +124,12 @@ PsnSender::PsnSender(QObject* parent) : QObject(parent) {
 }
 
 void PsnSender::configure(const NetworkConfig& cfg) {
-    psnMode_ = cfg.psnMode;
-    port_    = cfg.port;
+    psnMode_    = cfg.psnMode;
+    port_       = cfg.port;
+    psnOffsetX_ = cfg.psnOffsetX;
+    psnOffsetY_ = cfg.psnOffsetY;
+    psnOffsetZ_ = cfg.psnOffsetZ;
+    psnRotDeg_  = cfg.psnRotDeg;
 
     socket_.close();
 
@@ -188,10 +192,15 @@ void PsnSender::sendDataPacketsV2(const QMap<int, QPair<float,float>>& positions
     // Build per-tracker chunks.
     QList<QByteArray> trackerChunks;
     trackerChunks.reserve(positions.size());
+    const float cosA = std::cos(-psnRotDeg_ * static_cast<float>(M_PI) / 180.f);
+    const float sinA = std::sin(-psnRotDeg_ * static_cast<float>(M_PI) / 180.f);
+
     for (auto it = positions.cbegin(); it != positions.cend(); ++it) {
         const int   id = it.key();
-        const float x  = it.value().first;
-        const float z  = it.value().second;
+        const float dx = it.value().first  - psnOffsetX_;
+        const float dz = it.value().second - psnOffsetZ_;
+        const float x  = dx * cosA - dz * sinA;
+        const float z  = dx * sinA + dz * cosA;
 
         float vx = 0.0f, vz = 0.0f;
         if (lastPos_.contains(id) && lastTimeMs_.contains(id)) {
@@ -204,7 +213,7 @@ void PsnSender::sendDataPacketsV2(const QMap<int, QPair<float,float>>& positions
         lastPos_[id]    = {x, z};
         lastTimeMs_[id] = nowMs;
 
-        const float      yOut        = heights.value(id, 0.0f);
+        const float      yOut        = heights.value(id, 0.0f) - psnOffsetY_;
         const QByteArray posChunk    = makeDataTrackerPosChunk(x, -z, yOut);
         const QByteArray speedChunk  = makeDataTrackerSpeedChunk(vx, -vz, 0.0f);
         const QByteArray statusChunk = makeDataTrackerStatusChunk(1.0f);
