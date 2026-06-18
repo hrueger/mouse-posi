@@ -26,6 +26,10 @@ public:
     void setMvrImports(const QList<MvrImport>& imports);
     void setShowMvrLabels(bool show);
     void setMvrRenderMode(MvrRenderMode mode);
+    void setPsnOrigin(QVector3D offset, float rotDeg);
+    void setShowStageOrigin(bool show);
+    void setShowPsnOrigin(bool show);
+    void setShowMvrOrigins(bool show);
 
     Stage3DCameraState getCameraState() const;
     void               setCameraState(const Stage3DCameraState& s);

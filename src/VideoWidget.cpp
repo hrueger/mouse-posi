@@ -126,6 +126,14 @@ void VideoWidget::setCalibBoundaryVisible(bool on) {
     update();
 }
 
+void VideoWidget::setPsnOrigin(QVector3D offset, float rotDeg) {
+    psnTransform_.setToIdentity();
+    psnTransform_.translate(offset);
+    if (rotDeg != 0.0f)
+        psnTransform_.rotate(rotDeg, 0, 1, 0);
+    update();
+}
+
 void VideoWidget::updateScaling() {
     if (frame_.isNull()) return;
     double scaleX = double(width())  / frame_.width();
@@ -676,8 +684,8 @@ void VideoWidget::paintEvent(QPaintEvent*) {
             if (t.id == id) { color = t.color; break; }
         bool assigned = assignedTrackers_.isEmpty() || assignedTrackers_.contains(id);
         p.setOpacity(assigned ? 0.85 : unassignedAlpha_ / 255.0 * 0.85);
-        drawTrackerDot(p, frameToWidget(calibration_->stageToPixel(it.value().x(),
-                                                                    it.value().z())),
+        const QVector3D pos = psnTransform_.map(it.value());
+        drawTrackerDot(p, frameToWidget(calibration_->stageToPixel(pos.x(), pos.z())),
                        id, color.lighter(130), false);
         p.setOpacity(1.0);
     }

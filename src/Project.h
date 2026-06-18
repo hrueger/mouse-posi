@@ -79,6 +79,12 @@ struct NetworkConfig {
     QString  psnInterface;
     QString  sessionInterface;
     SacnInputConfig sacnInput; // legacy
+    float    psnOffsetX         = 0.0f;  // metres
+    float    psnOffsetY         = 0.0f;
+    float    psnOffsetZ         = 0.0f;
+    float    psnRotDeg          = 0.0f;  // CCW rotation around Y axis
+    bool     showStageOriginIn3D= true;
+    bool     showPsnOriginIn3D  = true;
 };
 
 struct Stage3DCameraState {

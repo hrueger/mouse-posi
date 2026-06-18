@@ -268,10 +268,10 @@ void Stage3DView::setActiveTool(Stage3DTool tool)
     polyVerts_.clear();
     update();
     switch (tool) {
-        case Stage3DTool::OrbitCamera: setCursor(Qt::ArrowCursor);      break;
-        case Stage3DTool::Select:      setCursor(Qt::ArrowCursor);      break;
-        case Stage3DTool::DrawRect:    setCursor(Qt::CrossCursor);      break;
-        case Stage3DTool::DrawPolygon: setCursor(Qt::CrossCursor);      break;
+        case Stage3DTool::OrbitCamera: setCursor(Qt::ArrowCursor);  break;
+        case Stage3DTool::Select:      setCursor(Qt::ArrowCursor);  break;
+        case Stage3DTool::DrawRect:    setCursor(Qt::CrossCursor);  break;
+        case Stage3DTool::DrawPolygon: setCursor(Qt::CrossCursor);  break;
     }
 }
 
@@ -393,6 +393,7 @@ void Stage3DView::paintGL()
     glDisable(GL_BLEND);
     drawGrid();
     drawCalibRect();
+    drawOriginMarkers();
 
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -411,6 +412,7 @@ void Stage3DView::paintGL()
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing);
     drawMvrLabels(p);
+    drawOriginLabels(p);
     drawGizmoOverlay(p);
 }
 
@@ -479,6 +481,18 @@ int Stage3DView::pickObject(QPoint screenPt)
 {
     QPointF stageXZ;
     if (!unprojectToHeight(screenPt, 0.0f, stageXZ)) return -1;
+
+    // Proximity check for origin markers (visible system objects)
+    const float kPickRadius = 0.5f;
+    if (showStageOrigin_) {
+        const float d = std::hypot(stageXZ.x(), stageXZ.y());
+        if (d < kPickRadius) return -20;
+    }
+    if (showPsnOrigin_) {
+        const float d = std::hypot(float(stageXZ.x()) - psnOffset_.x(),
+                                   float(stageXZ.y()) - psnOffset_.z());
+        if (d < kPickRadius) return -21;
+    }
 
     for (const auto& obj : stageObjects_) {
         // System objects (camera, calib rect) and stage outlines are not pickable
@@ -816,6 +830,31 @@ void Stage3DView::setShowRays(bool on)
     update();
 }
 
+void Stage3DView::setPsnOrigin(QVector3D offset, float rotDeg)
+{
+    psnOffset_ = offset;
+    psnRotDeg_ = rotDeg;
+    update();
+}
+
+void Stage3DView::setShowStageOrigin(bool show)
+{
+    showStageOrigin_ = show;
+    update();
+}
+
+void Stage3DView::setShowPsnOrigin(bool show)
+{
+    showPsnOrigin_ = show;
+    update();
+}
+
+void Stage3DView::setShowMvrOrigins(bool show)
+{
+    showMvrOrigins_ = show;
+    update();
+}
+
 void Stage3DView::drawFixtureRays()
 {
     if (!showRays_ || fixtureRays_.isEmpty()) return;
@@ -1104,6 +1143,116 @@ QPolygonF Stage3DView::rectToPolygon(QPointF center, float width, float depth, f
     return p;
 }
 
+void Stage3DView::drawOriginMarkers()
+{
+    const bool stageSelected = (selectedObjectId_ == -20);
+    const bool psnSelected   = (selectedObjectId_ == -21);
+
+    // Stage origin — fixed cross at (0,0,0)
+    if (showStageOrigin_) {
+        const float arm = 0.35f;
+        QVector<QVector3D> cross = {
+            {-arm,0,0},{arm,0,0},
+            {0,0,-arm},{0,0,arm},
+            {0,-arm,0},{0,arm,0},
+        };
+        glLineWidth(stageSelected ? 3.0f : 2.0f);
+        drawPrimitive(GL_LINES, cross, stageSelected ? QColor(255,220,60) : QColor(220,220,220));
+        glLineWidth(1.0f);
+    }
+
+    // MVR origin markers — one per enabled import
+    if (showMvrOrigins_) {
+        const float arm = 0.35f;
+        for (const MvrImport& imp : mvrImports_) {
+            if (!imp.enabled) continue;
+            QMatrix4x4 model;
+            model.translate(imp.offsetX, imp.offsetY, imp.offsetZ);
+            if (imp.rotDeg != 0.f) model.rotate(imp.rotDeg, 0, 1, 0);
+            const QMatrix4x4 mvp = mvpMatrix() * model;
+            QVector<QVector3D> cross = {
+                {-arm,0,0},{arm,0,0},
+                {0,0,-arm},{0,0,arm},
+                {0,-arm,0},{0,arm,0},
+            };
+            glLineWidth(2.0f);
+            drawPrimitiveEx(GL_LINES, cross, QColor(255, 190, 40), 1.0f, mvp);
+            glLineWidth(1.0f);
+        }
+    }
+
+    // PSN origin — cyan cross at (psnOffset.x, 0, psnOffset.z), rotated
+    if (showPsnOrigin_) {
+        const float arm = 0.45f;
+        const float hs  = 0.10f;
+
+        QMatrix4x4 model;
+        model.translate(psnOffset_.x(), 0, psnOffset_.z());
+        if (psnRotDeg_ != 0.f) model.rotate(psnRotDeg_, 0, 1, 0);
+        const QMatrix4x4 psnMvp = mvpMatrix() * model;
+
+        const QColor psnColor    = psnSelected ? QColor(255, 220, 60) : QColor(0, 190, 200);
+        const QColor handleColor = psnSelected ? QColor(255, 180, 0)  : QColor(200, 100, 0);
+
+        QVector<QVector3D> cross = {
+            {-arm,0,0},{arm,0,0},
+            {0,0,-arm},{0,0,arm},
+            {0,-arm,0},{0,arm,0},
+        };
+        glLineWidth(psnSelected ? 3.0f : 2.0f);
+        drawPrimitiveEx(GL_LINES, cross, psnColor, 1.0f, psnMvp);
+
+        // Rotation handle: small diamond at X-arm tip indicating orientation
+        QVector<QVector3D> handle = {
+            {arm-hs, 0, 0}, {arm+hs, 0, 0},
+            {arm, 0, -hs},  {arm, 0, hs},
+        };
+        glLineWidth(psnSelected ? 2.5f : 1.5f);
+        drawPrimitiveEx(GL_LINES, handle, handleColor, 1.0f, psnMvp);
+        glLineWidth(1.0f);
+    }
+}
+
+void Stage3DView::drawOriginLabels(QPainter& p) const
+{
+    auto projectPoint = [&](QVector3D world) -> QPointF {
+        const QVector4D clip = mvpMatrix() * QVector4D(world, 1.0f);
+        if (clip.w() <= 0.0f) return QPointF(-9999, -9999);
+        const QVector3D ndc = clip.toVector3DAffine();
+        if (ndc.x() < -1.1f || ndc.x() > 1.1f || ndc.y() < -1.1f || ndc.y() > 1.1f)
+            return QPointF(-9999, -9999);
+        return QPointF((ndc.x() + 1.f) * 0.5f * viewW_,
+                       (1.f - ndc.y()) * 0.5f * viewH_);
+    };
+
+    p.setFont(QFont(QStringLiteral("Arial"), 8, QFont::Bold));
+
+    auto drawLabel = [&](QPointF screen, const QString& text, QColor col) {
+        if (screen.x() < -100) return;
+        p.setPen(QColor(0, 0, 0, 160));
+        p.drawText(screen + QPointF(5+1, -3+1), text);
+        p.setPen(col);
+        p.drawText(screen + QPointF(5, -3), text);
+    };
+
+    if (showStageOrigin_)
+        drawLabel(projectPoint({0, 0, 0}), QStringLiteral("Stage"), QColor(220, 220, 220));
+
+    if (showPsnOrigin_) {
+        const QPointF sc = projectPoint({psnOffset_.x(), 0, psnOffset_.z()});
+        drawLabel(sc, QStringLiteral("PSN"), QColor(0, 220, 200));
+    }
+
+    if (showMvrOrigins_) {
+        for (const MvrImport& imp : mvrImports_) {
+            if (!imp.enabled) continue;
+            const QPointF sc = projectPoint({imp.offsetX, imp.offsetY, imp.offsetZ});
+            drawLabel(sc, imp.name.isEmpty() ? QStringLiteral("MVR") : imp.name,
+                      QColor(255, 190, 40));
+        }
+    }
+}
+
 void Stage3DView::drawDrawingPreview()
 {
     if (activeTool_ == Stage3DTool::DrawRect && rectDrawing_) {
@@ -1207,6 +1356,7 @@ void Stage3DView::mouseMoveEvent(QMouseEvent* e)
             polyCurrent_ = stageXZ;
         update();
     }
+
 }
 
 void Stage3DView::mouseReleaseEvent(QMouseEvent* e)

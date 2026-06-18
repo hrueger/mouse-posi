@@ -37,7 +37,7 @@ Stage3DPanel::Stage3DPanel(QWidget* parent) : QWidget(parent)
 
     auto* showLabelsAct = viewSettingsMenu->addAction(QStringLiteral("Show Labels"));
     showLabelsAct->setCheckable(true);
-    showLabelsAct->setChecked(false);  // default off
+    showLabelsAct->setChecked(false);
     connect(showLabelsAct, &QAction::toggled, this, [this](bool show) {
         view_->setShowMvrLabels(show);
         emit showMvrLabelsChanged(show);
@@ -47,6 +47,13 @@ Stage3DPanel::Stage3DPanel(QWidget* parent) : QWidget(parent)
     showRaysAct->setCheckable(true);
     showRaysAct->setChecked(false);
     connect(showRaysAct, &QAction::toggled, view_, &Stage3DView::setShowRays);
+
+    viewSettingsMenu->addSeparator();
+
+    auto* showMvrOriginsAct = viewSettingsMenu->addAction(QStringLiteral("Show MVR Origins"));
+    showMvrOriginsAct->setCheckable(true);
+    showMvrOriginsAct->setChecked(true);
+    connect(showMvrOriginsAct, &QAction::toggled, view_, &Stage3DView::setShowMvrOrigins);
 
     viewSettingsMenu->addSeparator();
     viewSettingsMenu->addAction(QStringLiteral("Render Mode"))->setEnabled(false);
@@ -102,10 +109,6 @@ Stage3DPanel::Stage3DPanel(QWidget* parent) : QWidget(parent)
         QFile mvrFile(path);
         if (mvrFile.open(QIODevice::ReadOnly))
             import.mvrData = mvrFile.readAll();
-        // MainWindow owns the accumulated import: it merges this file's layers
-        // with any previously imported MVRs and pushes the combined result back
-        // to the view and items panel. Don't set the view directly here, or the
-        // earlier imports would be dropped.
         emit mvrImportChanged(import);
     });
 
@@ -122,7 +125,7 @@ Stage3DPanel::Stage3DPanel(QWidget* parent) : QWidget(parent)
         a->setToolTip(tip);
         a->setCheckable(true);
         toolGroup->addAction(a);
-        connect(a, &QAction::triggered, view_, [this, t]{ view_->setActiveTool(t); });
+        connect(a, &QAction::triggered, this, [this, t]{ view_->setActiveTool(t); });
         return a;
     };
     addTool(QStringLiteral("↺"), QStringLiteral("Orbit camera (drag)"), Stage3DTool::OrbitCamera)->setChecked(true);
@@ -188,6 +191,26 @@ void Stage3DPanel::setShowMvrLabels(bool show)
 void Stage3DPanel::setMvrRenderMode(MvrRenderMode mode)
 {
     view_->setMvrRenderMode(mode);
+}
+
+void Stage3DPanel::setPsnOrigin(QVector3D offset, float rotDeg)
+{
+    view_->setPsnOrigin(offset, rotDeg);
+}
+
+void Stage3DPanel::setShowStageOrigin(bool show)
+{
+    view_->setShowStageOrigin(show);
+}
+
+void Stage3DPanel::setShowPsnOrigin(bool show)
+{
+    view_->setShowPsnOrigin(show);
+}
+
+void Stage3DPanel::setShowMvrOrigins(bool show)
+{
+    view_->setShowMvrOrigins(show);
 }
 
 Stage3DCameraState Stage3DPanel::getCameraState() const

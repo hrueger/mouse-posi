@@ -10,6 +10,31 @@
 #include <QPainter>
 #include <QPixmap>
 
+static QIcon crosshairIcon()
+{
+    static QIcon icon;
+    if (!icon.isNull()) return icon;
+    QPixmap pm(14, 14);
+    pm.fill(Qt::transparent);
+    QPainter p(&pm);
+    p.setRenderHint(QPainter::Antialiasing);
+    const QColor blue(80, 160, 255);
+    const float cx = 7.0f, cy = 7.0f, r = 2.5f, gap = r + 1.2f;
+    // Four arms from gap to edge
+    p.setPen(QPen(blue, 1.5f, Qt::SolidLine, Qt::RoundCap));
+    p.drawLine(QPointF(0,   cy), QPointF(cx - gap, cy));
+    p.drawLine(QPointF(14,  cy), QPointF(cx + gap, cy));
+    p.drawLine(QPointF(cx, 0),   QPointF(cx, cy - gap));
+    p.drawLine(QPointF(cx, 14),  QPointF(cx, cy + gap));
+    // Centre circle
+    p.setPen(QPen(blue, 1.2f));
+    p.setBrush(Qt::NoBrush);
+    p.drawEllipse(QPointF(cx, cy), r, r);
+    p.end();
+    icon = QIcon(pm);
+    return icon;
+}
+
 static QIcon fixtureIcon()
 {
     static QIcon icon;
@@ -141,6 +166,13 @@ void StageItemsPanel::setMvrImports(const QList<MvrImport>& imports)
     rebuildTree();
 }
 
+void StageItemsPanel::setOriginVisibility(bool stageOriginIn3D, bool psnOriginIn3D)
+{
+    stageOriginVisible_ = stageOriginIn3D;
+    psnOriginVisible_   = psnOriginIn3D;
+    rebuildTree();
+}
+
 void StageItemsPanel::setSelectedObject(int id)
 {
     selectedId_ = id;
@@ -148,15 +180,17 @@ void StageItemsPanel::setSelectedObject(int id)
 
     updatingTree_ = true;
     QTreeWidgetItemIterator it(tree_);
+    bool found = false;
     while (*it) {
         if ((*it)->data(COL_NAME, RoleKind) == QLatin1String("stage") &&
             (*it)->data(COL_NAME, RoleId).toInt() == id) {
             tree_->setCurrentItem(*it);
+            found = true;
             break;
         }
         ++it;
     }
-    if (!tree_->currentItem()) tree_->clearSelection();
+    if (!found) tree_->clearSelection();
     updatingTree_ = false;
 }
 
@@ -244,6 +278,17 @@ void StageItemsPanel::onItemChanged(QTreeWidgetItem* item, int col)
 
     if (kind == QLatin1String("stage")) {
         const int id = item->data(COL_NAME, RoleId).toInt();
+
+        // Origin system items (-20 = stage, -21 = PSN) — only 3D checkbox
+        if (id == -20 || id == -21) {
+            if (col != COL_3D) return;
+            const bool checked = (item->checkState(COL_3D) == Qt::Checked);
+            if (id == -20) stageOriginVisible_ = checked;
+            else           psnOriginVisible_   = checked;
+            emit visibilityChanged(id, false, checked);
+            return;
+        }
+
         if (col == COL_NAME && id >= 0) {
             const QString newName = item->text(COL_NAME).trimmed();
             if (!newName.isEmpty()) {
@@ -312,6 +357,22 @@ void StageItemsPanel::rebuildTree()
     updatingTree_ = true;
     const int prevId = selectedId_;
     tree_->clear();
+
+    // ── Fixed system origin items ──────────────────────────────────────────
+    auto makeOriginItem = [&](const QString& label, int id, bool visibleIn3D) {
+        auto* item = new QTreeWidgetItem(tree_);
+        item->setText(COL_NAME, label);
+        item->setText(COL_TYPE, QStringLiteral("Origin"));
+        item->setData(COL_NAME, RoleKind, QStringLiteral("stage"));
+        item->setData(COL_NAME, RoleId,   id);
+        item->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemIsUserCheckable);
+        item->setForeground(COL_NAME, QColor(160, 160, 160));
+        item->setIcon(COL_NAME, crosshairIcon());
+        item->setCheckState(COL_3D, visibleIn3D ? Qt::Checked : Qt::Unchecked);
+        if (id == prevId) tree_->setCurrentItem(item);
+    };
+    makeOriginItem(QStringLiteral("Stage Origin"), -20, stageOriginVisible_);
+    makeOriginItem(QStringLiteral("PSN Origin"),   -21, psnOriginVisible_);
 
     // ── Manual stage objects ───────────────────────────────────────────────
     for (const auto& obj : objects_) {

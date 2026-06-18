@@ -250,6 +250,12 @@ MainWindow::MainWindow(NdiReceiver* ndi,
     // 3D view: object clicked
     connect(stage3DPanel_, &Stage3DPanel::objectSelected, this, [this](int id) {
         stageItemsPanel_->setSelectedObject(id);
+        if (id == -21) {
+            const QVector3D off(project_.network.psnOffsetX,
+                                project_.network.psnOffsetY,
+                                project_.network.psnOffsetZ);
+            stagePropertiesPanel_->setPsnOrigin(off, project_.network.psnRotDeg);
+        }
         stagePropertiesPanel_->setSelectedObject(id);
         stage3DPanel_->setSelectedObject(id);
     });
@@ -257,6 +263,12 @@ MainWindow::MainWindow(NdiReceiver* ndi,
     // Items panel: selection changed
     connect(stageItemsPanel_, &StageItemsPanel::selectionChanged, this, [this](int id) {
         stage3DPanel_->setSelectedObject(id);
+        if (id == -21) {
+            const QVector3D off(project_.network.psnOffsetX,
+                                project_.network.psnOffsetY,
+                                project_.network.psnOffsetZ);
+            stagePropertiesPanel_->setPsnOrigin(off, project_.network.psnRotDeg);
+        }
         stagePropertiesPanel_->setSelectedObject(id);
     });
 
@@ -480,6 +492,7 @@ MainWindow::MainWindow(NdiReceiver* ndi,
 
             stage3DPanel_->setMvrImports(mvrImports_);
             stageItemsPanel_->setMvrImports(mvrImports_);
+    stagePropertiesPanel_->setMvrImports(mvrImports_);
             fixturesPanel_->setData(project_.mvr.imports, project_.trackers);
             dmxMonitorPanel_->setMvrImports(project_.mvr.imports);
             stagePropertiesPanel_->setSelectedObject(-999);
@@ -513,6 +526,7 @@ MainWindow::MainWindow(NdiReceiver* ndi,
             }
             stage3DPanel_->setMvrImports(mvrImports_);
             stageItemsPanel_->setMvrImports(mvrImports_);
+    stagePropertiesPanel_->setMvrImports(mvrImports_);
             markDirty();
         }
     });
@@ -584,20 +598,42 @@ MainWindow::MainWindow(NdiReceiver* ndi,
         markDirty();
     });
 
+    // Properties panel: PSN origin edited
+    connect(stagePropertiesPanel_, &StagePropertiesPanel::psnOriginEdited,
+            this, [this](QVector3D offset, float rotDeg) {
+        project_.network.psnOffsetX = offset.x();
+        project_.network.psnOffsetY = offset.y();
+        project_.network.psnOffsetZ = offset.z();
+        project_.network.psnRotDeg  = rotDeg;
+        stage3DPanel_->setPsnOrigin(offset, rotDeg);
+        video_->setPsnOrigin(offset, rotDeg);
+        markDirty();
+    });
+
     // Items panel: vid / 3D visibility toggled
     connect(stageItemsPanel_, &StageItemsPanel::visibilityChanged,
             this, [this](int id, bool inVideo, bool in3D) {
-        if (id == -1) {
+        if (id == -20) {
+            project_.network.showStageOriginIn3D = in3D;
+            stage3DPanel_->setShowStageOrigin(in3D);
+            markDirty();
+        } else if (id == -21) {
+            project_.network.showPsnOriginIn3D = in3D;
+            stage3DPanel_->setShowPsnOrigin(in3D);
+            markDirty();
+        } else if (id == -1) {
             project_.calibrationView.showCameraIn3D = in3D;
+            syncAllStageObjects(); markDirty();
         } else if (id == -2) {
             project_.calibrationView.showCalibRectInVideo = inVideo;
             project_.calibrationView.showCalibRectIn3D    = in3D;
+            syncAllStageObjects(); markDirty();
         } else {
             for (auto& o : project_.stageObjects) {
                 if (o.id == id) { o.visibleInVideo = inVideo; o.visibleIn3D = in3D; break; }
             }
+            syncAllStageObjects(); markDirty();
         }
-        syncAllStageObjects(); markDirty();
     });
 
     // ── Status bar ────────────────────────────────────────────────────────
@@ -734,6 +770,9 @@ MainWindow::MainWindow(NdiReceiver* ndi,
             psnReceiver_->stop();
             psnReceiver_->wait();
         }
+        const QVector3D psnOff(cfg.psnOffsetX, cfg.psnOffsetY, cfg.psnOffsetZ);
+        stage3DPanel_->setPsnOrigin(psnOff, cfg.psnRotDeg);
+        video_->setPsnOrigin(psnOff, cfg.psnRotDeg);
         markDirty();
     });
     connect(settingsDialog_, &SettingsDialog::inputAdaptersChanged,
@@ -1547,11 +1586,24 @@ void MainWindow::applyProject() {
     }
     stage3DPanel_->setMvrImports(mvrImports_);
     stageItemsPanel_->setMvrImports(mvrImports_);
+    stagePropertiesPanel_->setMvrImports(mvrImports_);
     stage3DPanel_->setShowMvrLabels(project_.mvr.showLabels);
     stage3DPanel_->setMvrRenderMode(MvrRenderMode(int(project_.mvr.renderMode)));
     fixturesPanel_->setData(project_.mvr.imports, project_.trackers);
     if (dmxMonitorPanel_)
         dmxMonitorPanel_->setMvrImports(project_.mvr.imports);
+
+    {
+        const QVector3D psnOff(project_.network.psnOffsetX,
+                               project_.network.psnOffsetY,
+                               project_.network.psnOffsetZ);
+        stage3DPanel_->setPsnOrigin(psnOff, project_.network.psnRotDeg);
+        video_->setPsnOrigin(psnOff, project_.network.psnRotDeg);
+        stage3DPanel_->setShowStageOrigin(project_.network.showStageOriginIn3D);
+        stage3DPanel_->setShowPsnOrigin(project_.network.showPsnOriginIn3D);
+        stageItemsPanel_->setOriginVisibility(project_.network.showStageOriginIn3D,
+                                              project_.network.showPsnOriginIn3D);
+    }
 
     updateCalibStatus();
     applyingProject_ = false;
@@ -2550,6 +2602,7 @@ void MainWindow::commitMvrImport(MvrImport import, int replaceIndex, bool copyCo
 
     stage3DPanel_->setMvrImports(mvrImports_);
     stageItemsPanel_->setMvrImports(mvrImports_);
+    stagePropertiesPanel_->setMvrImports(mvrImports_);
     fixturesPanel_->setData(project_.mvr.imports, project_.trackers);
     dmxMonitorPanel_->setMvrImports(project_.mvr.imports);
 

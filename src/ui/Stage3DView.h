@@ -49,6 +49,10 @@ public:
     void setCameraMarker(QVector3D pos, float fovDeg, bool visible);
     void setFixtureRays(const QList<FixtureRay>& rays);
     void setShowRays(bool on);
+    void setPsnOrigin(QVector3D offset, float rotDeg);
+    void setShowStageOrigin(bool show);
+    void setShowPsnOrigin(bool show);
+    void setShowMvrOrigins(bool show);
 
     Stage3DCameraState getCameraState() const;
     void               setCameraState(const Stage3DCameraState& s);
@@ -96,6 +100,8 @@ private:
     void drawMvrLabels(QPainter& p) const;
     void drawDrawingPreview();
     void drawCameraMarker();
+    void drawOriginMarkers();
+    void drawOriginLabels(QPainter& p) const;
     void drawGizmoOverlay(QPainter& p) const;
 
     // Upload a vertex array as a temporary draw (lines or triangles)
@@ -181,4 +187,11 @@ private:
     // Fixture rays (Show Rays mode)
     bool              showRays_    = false;
     QList<FixtureRay> fixtureRays_;
+
+    // PSN origin alignment
+    QVector3D psnOffset_        = {};
+    float     psnRotDeg_        = 0.0f;
+    bool      showStageOrigin_  = true;
+    bool      showPsnOrigin_    = true;
+    bool      showMvrOrigins_   = true;
 };

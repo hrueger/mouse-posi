@@ -17,6 +17,7 @@ public:
     void setAllObjects(const QList<StageObject>& all);
     void setSelectedObject(int id);
     void setMvrImports(const QList<MvrImport>& imports);
+    void setOriginVisibility(bool stageOriginIn3D, bool psnOriginIn3D);
 
 signals:
     void selectionChanged(int id);
@@ -65,6 +66,8 @@ private:
 
     QList<StageObject> objects_;
     QList<MvrImport>   mvrImports_;
-    int  selectedId_    = -999;
-    bool updatingTree_  = false;
+    int  selectedId_          = -999;
+    bool updatingTree_        = false;
+    bool stageOriginVisible_  = true;
+    bool psnOriginVisible_    = true;
 };

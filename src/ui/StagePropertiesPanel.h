@@ -9,6 +9,7 @@ class QDoubleSpinBox;
 class QLineEdit;
 class QLabel;
 class QComboBox;
+class QPushButton;
 
 class StagePropertiesPanel : public QWidget {
     Q_OBJECT
@@ -22,15 +23,19 @@ public:
     void setTrackers(const QList<TrackerConfig>& trackers);
     void setMvrFixture(int importIdx, int layerIdx, int objIdx,
                        const MvrImportData& importData, const QList<TrackerConfig>& trackers);
+    void setPsnOrigin(QVector3D offset, float rotDeg);
+    void setMvrImports(const QList<MvrImport>& imports);
 
 signals:
     void objectEdited(const StageObject& obj);
     void mvrImportEdited(int index, MvrImport import);
     void mvrFixtureTrackerLinkChanged(int importIdx, int layerIdx, int objIdx, int trackerLink);
+    void psnOriginEdited(QVector3D offset, float rotDeg);
 
 private slots:
     void onPropertiesChanged();
     void onMvrPropertiesChanged();
+    void onPsnOriginChanged();
 
 private:
     void updatePropertiesForm(int id);
@@ -80,10 +85,22 @@ private:
     int             fixtureLayerIdx_  = -1;
     int             fixtureObjIdx_    = -1;
 
+    // PSN origin properties
+    QWidget*        psnOriginGroup_;
+    QDoubleSpinBox* psnXSpin_;
+    QDoubleSpinBox* psnYSpin_;
+    QDoubleSpinBox* psnZSpin_;
+    QDoubleSpinBox* psnRotSpin_;
+    QPushButton*    snapToMvrBtn_;
+
+    // Stage origin (read-only info label)
+    QWidget*        stageOriginGroup_;
+
     bool has3DCalib_ = false;
 
     QList<StageObject>  objects_;
     QList<TrackerConfig> trackers_;
+    QList<MvrImport>    mvrImports_;
     MvrImport           mvrImport_;
     int  mvrImportIndex_ = -1;
     int  selectedId_   = -999;

@@ -522,6 +522,12 @@ Project Project::load(const QString& path)
     p.network.sacnInput.address   = static_cast<quint16>(sacn["address"].toInt(1));
     p.network.sacnInput.minHeight = float(sacn["minHeight"].toDouble(0.0));
     p.network.sacnInput.maxHeight = float(sacn["maxHeight"].toDouble(10.0));
+    p.network.psnOffsetX          = float(net["psnOffsetX"].toDouble(0.0));
+    p.network.psnOffsetY          = float(net["psnOffsetY"].toDouble(0.0));
+    p.network.psnOffsetZ          = float(net["psnOffsetZ"].toDouble(0.0));
+    p.network.psnRotDeg           = float(net["psnRotDeg"].toDouble(0.0));
+    p.network.showStageOriginIn3D = net["showStageOriginIn3D"].toBool(true);
+    p.network.showPsnOriginIn3D   = net["showPsnOriginIn3D"].toBool(true);
 
     QJsonObject cv = root["calibrationView"].toObject();
     p.calibrationView.showFloorGrid        = cv["showFloorGrid"].toBool(false);
@@ -640,6 +646,12 @@ void Project::save(const QString& path, std::function<void(int)> progressCb) con
     net["port"]             = network.port;
     net["psnInterface"]     = network.psnInterface;
     net["sessionInterface"] = network.sessionInterface;
+    net["psnOffsetX"]          = double(network.psnOffsetX);
+    net["psnOffsetY"]          = double(network.psnOffsetY);
+    net["psnOffsetZ"]          = double(network.psnOffsetZ);
+    net["psnRotDeg"]           = double(network.psnRotDeg);
+    net["showStageOriginIn3D"] = network.showStageOriginIn3D;
+    net["showPsnOriginIn3D"]   = network.showPsnOriginIn3D;
     QJsonObject sacn;
     sacn["enabled"]   = network.sacnInput.enabled;
     sacn["mode"]      = network.sacnInput.mode == SacnMode::Unicast ? "unicast" : "multicast";

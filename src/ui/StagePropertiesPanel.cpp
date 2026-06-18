@@ -5,6 +5,8 @@
 #include <QLabel>
 #include <QComboBox>
 #include <QFormLayout>
+#include <QPushButton>
+#include <QMenu>
 #include <QtMath>
 #include <cmath>
 
@@ -143,6 +145,77 @@ StagePropertiesPanel::StagePropertiesPanel(QWidget* parent) : QWidget(parent)
     fixtureGroup_->hide();
     layout->addWidget(fixtureGroup_);
 
+    // ── PSN origin properties ─────────────────────────────────────────────
+    psnOriginGroup_ = new QWidget;
+    auto* psnForm   = new QFormLayout(psnOriginGroup_);
+    psnForm->setRowWrapPolicy(QFormLayout::DontWrapRows);
+    psnForm->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+    psnForm->setLabelAlignment(Qt::AlignRight);
+
+    auto makePsnSpin = [](double min, double max, double step = 0.1, int dec = 2) {
+        auto* s = new QDoubleSpinBox;
+        s->setRange(min, max); s->setSingleStep(step); s->setDecimals(dec);
+        return s;
+    };
+    psnXSpin_   = makePsnSpin(-100.0, 100.0);  psnXSpin_->setSuffix(" m");
+    psnYSpin_   = makePsnSpin(-20.0,  20.0);   psnYSpin_->setSuffix(" m");
+    psnZSpin_   = makePsnSpin(-100.0, 100.0);  psnZSpin_->setSuffix(" m");
+    psnRotSpin_ = makePsnSpin(-180.0, 180.0, 1.0, 1); psnRotSpin_->setSuffix(" °");
+
+    psnForm->addRow("PSN Offset X:", psnXSpin_);
+    psnForm->addRow("PSN Offset Y:", psnYSpin_);
+    psnForm->addRow("PSN Offset Z:", psnZSpin_);
+    psnForm->addRow("PSN Rotation:", psnRotSpin_);
+
+    snapToMvrBtn_ = new QPushButton(QStringLiteral("Move to MVR origin…"));
+    snapToMvrBtn_->setEnabled(false);
+    psnForm->addRow("", snapToMvrBtn_);
+
+    psnOriginGroup_->hide();
+    layout->addWidget(psnOriginGroup_);
+
+    for (auto* s : {psnXSpin_, psnYSpin_, psnZSpin_, psnRotSpin_})
+        connect(s, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+                this, &StagePropertiesPanel::onPsnOriginChanged);
+
+    connect(snapToMvrBtn_, &QPushButton::clicked, this, [this] {
+        QList<int> enabledIdx;
+        for (int i = 0; i < mvrImports_.size(); ++i)
+            if (mvrImports_[i].enabled) enabledIdx << i;
+        if (enabledIdx.isEmpty()) return;
+
+        auto applyImport = [this](int i) {
+            const MvrImport& imp = mvrImports_[i];
+            const QVector3D off(imp.offsetX, imp.offsetY, imp.offsetZ);
+            setPsnOrigin(off, imp.rotDeg);
+            emit psnOriginEdited(off, imp.rotDeg);
+        };
+
+        if (enabledIdx.size() == 1) {
+            applyImport(enabledIdx.first());
+        } else {
+            QMenu menu(this);
+            for (int i : enabledIdx) {
+                const QString label = mvrImports_[i].name.isEmpty()
+                                      ? QStringLiteral("MVR Import %1").arg(i + 1)
+                                      : mvrImports_[i].name;
+                menu.addAction(label, this, [applyImport, i]{ applyImport(i); });
+            }
+            menu.exec(snapToMvrBtn_->mapToGlobal(snapToMvrBtn_->rect().bottomLeft()));
+        }
+    });
+
+    // ── Stage origin (read-only) ───────────────────────────────────────────
+    stageOriginGroup_ = new QWidget;
+    auto* soLayout    = new QVBoxLayout(stageOriginGroup_);
+    soLayout->setContentsMargins(4, 4, 4, 4);
+    auto* soLabel = new QLabel("Stage calibration origin\n(0, 0, 0) — read-only reference");
+    soLabel->setAlignment(Qt::AlignCenter);
+    soLabel->setStyleSheet("color: palette(placeholderText); font-style: italic;");
+    soLayout->addWidget(soLabel);
+    stageOriginGroup_->hide();
+    layout->addWidget(stageOriginGroup_);
+
     layout->addStretch();
 
     for (auto* s : {heightSpin_, xSpin_, zSpin_, widthSpin_, depthSpin_, rotSpin_, fovSpin_})
@@ -223,8 +296,37 @@ void StagePropertiesPanel::setMvrFixture(int importIdx, int layerIdx, int objIdx
 
     propsGroup_->hide();
     mvrPropsGroup_->hide();
+    psnOriginGroup_->hide();
+    stageOriginGroup_->hide();
     noSelectionLabel_->hide();
     fixtureGroup_->show();
+}
+
+void StagePropertiesPanel::setPsnOrigin(QVector3D offset, float rotDeg)
+{
+    updatingForm_ = true;
+    psnXSpin_->setValue(double(offset.x()));
+    psnYSpin_->setValue(double(offset.y()));
+    psnZSpin_->setValue(double(offset.z()));
+    psnRotSpin_->setValue(double(rotDeg));
+    updatingForm_ = false;
+}
+
+void StagePropertiesPanel::setMvrImports(const QList<MvrImport>& imports)
+{
+    mvrImports_ = imports;
+    const bool hasEnabled = std::any_of(imports.begin(), imports.end(),
+                                        [](const MvrImport& m){ return m.enabled; });
+    snapToMvrBtn_->setEnabled(hasEnabled);
+}
+
+void StagePropertiesPanel::onPsnOriginChanged()
+{
+    if (updatingForm_) return;
+    const QVector3D off(float(psnXSpin_->value()),
+                        float(psnYSpin_->value()),
+                        float(psnZSpin_->value()));
+    emit psnOriginEdited(off, float(psnRotSpin_->value()));
 }
 
 void StagePropertiesPanel::setMvrImport(int index, const MvrImport& import)
@@ -246,6 +348,8 @@ void StagePropertiesPanel::setMvrImport(int index, const MvrImport& import)
 
     propsGroup_->hide();
     fixtureGroup_->hide();
+    psnOriginGroup_->hide();
+    stageOriginGroup_->hide();
     noSelectionLabel_->hide();
     mvrPropsGroup_->show();
 }
@@ -271,10 +375,28 @@ void StagePropertiesPanel::updatePropertiesForm(int id)
 {
     mvrPropsGroup_->hide();
     fixtureGroup_->hide();
+    psnOriginGroup_->hide();
+    stageOriginGroup_->hide();
 
     if (id == -999) {
         propsGroup_->hide();
         noSelectionLabel_->show();
+        return;
+    }
+
+    // PSN origin — editable spinboxes
+    if (id == -21) {
+        propsGroup_->hide();
+        noSelectionLabel_->hide();
+        psnOriginGroup_->show();
+        return;
+    }
+
+    // Stage origin — read-only
+    if (id == -20) {
+        propsGroup_->hide();
+        noSelectionLabel_->hide();
+        stageOriginGroup_->show();
         return;
     }
 

@@ -2,6 +2,7 @@
 #include <QWidget>
 #include <QImage>
 #include <QMap>
+#include <QMatrix4x4>
 #include <QVector3D>
 #include <QPointF>
 #include "Project.h"
@@ -38,6 +39,7 @@ public slots:
     void setCalibBoundaryVisible(bool on);
     // Session: which trackers the local user is assigned (empty = all at full opacity)
     void setAssignedTrackers(const QList<int>& ids, int unassignedAlpha = 80);
+    void setPsnOrigin(QVector3D offset, float rotDeg);
 
     // Non-origin calibration point overlay.
     // highlighted: -2 = origin selected, -1 = none, >=0 = point index.
@@ -91,6 +93,8 @@ private:
     void    drawStageShapes(QPainter& p) const;
     // Returns -1 (origin), >=0 (point index), or -2 (nothing nearby).
     int     nearestCalibPoint(QPointF widgetPos, double threshold = 15.0) const;
+
+    QMatrix4x4 psnTransform_;  // applied to remote PSN positions before stageToPixel
 
     QImage  frame_;
     QPixmap scaledFrame_;
