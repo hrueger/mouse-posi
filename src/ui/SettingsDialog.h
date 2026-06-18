@@ -26,6 +26,8 @@ public:
     void showAdaptersTab();
     void showDmxTab();
 
+    InputAdaptersPanel* adaptersPanel() const { return adaptersPanel_; }
+
 signals:
     void networkConfigChanged(NetworkConfig cfg);
     void inputAdaptersChanged(QList<InputAdapterConfig> adapters);

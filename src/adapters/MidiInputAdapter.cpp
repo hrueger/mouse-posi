@@ -97,6 +97,10 @@ void MidiInputAdapter::rtMidiCallback(double /*ts*/,
         Qt::QueuedConnection);
 }
 
+void MidiInputAdapter::setLearning(bool on) {
+    learning_ = on;
+}
+
 void MidiInputAdapter::handleMessage(const std::vector<unsigned char>& msg) {
     if (msg.size() < 3) return;
 
@@ -106,6 +110,14 @@ void MidiInputAdapter::handleMessage(const std::vector<unsigned char>& msg) {
     const int midiChannel = (msg[0] & 0x0Fu) + 1;  // 1-based
     const int cc          = int(msg[1]);
     const float raw       = float(msg[2]) / 127.f;  // 0–1
+
+    emit midiEventReceived(cc, midiChannel, int(msg[2]));
+
+    if (learning_) {
+        learning_ = false;
+        emit learnedCC(cc, midiChannel);
+        return;
+    }
 
     for (const auto& m : config_.mappings) {
         if (m.midiCC < 0 || m.midiCC != cc) continue;

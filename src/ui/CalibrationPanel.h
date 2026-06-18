@@ -27,6 +27,7 @@ public:
     void setCalibration(const CalibrationData& cal);
     void setViewSettings(bool showFloorGrid, float clickPlaneHeight, bool showClickPlane);
     void setPlaneHeight(float h);
+    void setOperatingMode(OperatingMode mode);
     void reset();
     CalibrationData calibration() const { return result_; }
 
@@ -144,6 +145,7 @@ private:
     Scheme          scheme_   = Scheme::Rect3D;
     Placing         placing_  = Placing::None;
     bool            testMode_ = false;
+    OperatingMode   mode_     = OperatingMode::Stage3DPSN;
 
     Calibration*    previewCal_;
     CalibrationData result_;

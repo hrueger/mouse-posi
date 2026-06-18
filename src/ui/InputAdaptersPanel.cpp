@@ -12,6 +12,8 @@
 #include <QSplitter>
 #include <QGroupBox>
 #include <QFormLayout>
+#include <QPlainTextEdit>
+#include <QDateTime>
 
 static const QStringList kTargets = {
     "clickPlaneHeight", "dimmer", "zoom", "iris", "focus"
@@ -62,7 +64,13 @@ MappingRowWidget::MappingRowWidget(const InputAdapterMapping& m, QWidget* parent
     maxSpin_->setFixedWidth(100);
     lay->addWidget(maxSpin_);
 
-    auto* removeBtn = new QPushButton("✕");
+    learnBtn_ = new QPushButton("Learn");
+    learnBtn_->setCheckable(true);
+    learnBtn_->setFixedWidth(50);
+    learnBtn_->setToolTip("Click then move a MIDI knob to auto-assign CC and channel");
+    lay->addWidget(learnBtn_);
+
+    auto* removeBtn = new QPushButton("X");
     removeBtn->setFixedWidth(28);
     removeBtn->setToolTip("Remove this mapping");
     lay->addWidget(removeBtn);
@@ -72,7 +80,20 @@ MappingRowWidget::MappingRowWidget(const InputAdapterMapping& m, QWidget* parent
     connect(spin2_, QOverload<int>::of(&QSpinBox::valueChanged), this, &MappingRowWidget::changed);
     connect(minSpin_, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, &MappingRowWidget::changed);
     connect(maxSpin_, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, &MappingRowWidget::changed);
+    connect(learnBtn_, &QPushButton::clicked, this, &MappingRowWidget::learnRequested);
     connect(removeBtn, &QPushButton::clicked, this, &MappingRowWidget::removeRequested);
+}
+
+void MappingRowWidget::applyLearnedCC(int cc, int channel) {
+    QSignalBlocker b1(spin1_), b2(spin2_);
+    spin1_->setValue(cc);
+    spin2_->setValue(channel);
+    learnBtn_->setChecked(false);
+    emit changed();
+}
+
+void MappingRowWidget::setLearning(bool on) {
+    learnBtn_->setChecked(on);
 }
 
 InputAdapterMapping MappingRowWidget::mapping() const {
@@ -174,6 +195,28 @@ InputAdaptersPanel::InputAdaptersPanel(QWidget* parent) : QWidget(parent) {
     addMappingBtn_ = new QPushButton("+ Add Mapping");
     addMappingBtn_->setEnabled(false);
     detailLay->addWidget(addMappingBtn_);
+
+    // ── MIDI event log ────────────────────────────────────────────────────────
+    auto* logHeader = new QHBoxLayout;
+    logHeader->addWidget(new QLabel("<b>MIDI Log</b>"));
+    auto* clearLogBtn = new QPushButton("Clear");
+    clearLogBtn->setFixedHeight(20);
+    logHeader->addStretch();
+    logHeader->addWidget(clearLogBtn);
+    detailLay->addLayout(logHeader);
+
+    midiLog_ = new QPlainTextEdit;
+    midiLog_->setReadOnly(true);
+    midiLog_->setMaximumBlockCount(200);
+    midiLog_->setFixedHeight(90);
+    midiLog_->setPlaceholderText("MIDI CC events appear here…");
+    QFont mono = midiLog_->font();
+    mono.setFamily("Menlo");
+    mono.setPointSize(10);
+    midiLog_->setFont(mono);
+    detailLay->addWidget(midiLog_);
+
+    connect(clearLogBtn, &QPushButton::clicked, midiLog_, &QPlainTextEdit::clear);
 
     detailLay->addStretch();
     splitter->addWidget(detailWidget_);
@@ -322,12 +365,35 @@ void InputAdaptersPanel::rebuildMappingRows() {
         connect(row, &MappingRowWidget::removeRequested, this, [this, row]() {
             int idx = mappingRows_.indexOf(row);
             if (idx < 0 || currentIndex_ < 0) return;
+            if (learnRow_ == row) learnRow_ = nullptr;
             collectCurrentDetail();
             adapters_[currentIndex_].mappings.removeAt(idx);
             rebuildMappingRows();
             emitChanged();
         });
+        connect(row, &MappingRowWidget::learnRequested, this, [this, row]() {
+            // Cancel any previous learn row
+            if (learnRow_ && learnRow_ != row)
+                learnRow_->setLearning(false);
+            learnRow_ = row;
+            emit requestLearn();
+        });
     }
+}
+
+void InputAdaptersPanel::logMidiEvent(int cc, int ch, int rawVal) {
+    if (!midiLog_) return;
+    midiLog_->appendPlainText(
+        QStringLiteral("CC %1  Ch %2  Val %3")
+            .arg(cc, 3).arg(ch).arg(rawVal, 3));
+}
+
+void InputAdaptersPanel::applyLearnedCC(int cc, int ch) {
+    if (!learnRow_) return;
+    learnRow_->applyLearnedCC(cc, ch);
+    learnRow_ = nullptr;
+    collectCurrentDetail();
+    emitChanged();
 }
 
 void InputAdaptersPanel::emitChanged() {

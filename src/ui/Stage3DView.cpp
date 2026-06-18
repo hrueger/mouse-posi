@@ -790,6 +790,29 @@ void Stage3DView::drawStageObjects()
     }
 }
 
+static QVector<QVector3D> makeSphere(float cx, float cy, float cz, float r,
+                                      int stacks = 8, int slices = 12)
+{
+    QVector<QVector3D> verts;
+    verts.reserve(stacks * slices * 6);
+    for (int i = 0; i < stacks; ++i) {
+        const float t1 = float(M_PI) * i / stacks - float(M_PI) / 2.f;
+        const float t2 = float(M_PI) * (i + 1) / stacks - float(M_PI) / 2.f;
+        for (int j = 0; j < slices; ++j) {
+            const float p1 = 2.f * float(M_PI) * j / slices;
+            const float p2 = 2.f * float(M_PI) * (j + 1) / slices;
+            auto v = [&](float t, float p) {
+                return QVector3D(cx + r * cosf(t) * cosf(p),
+                                 cy + r * sinf(t),
+                                 cz + r * cosf(t) * sinf(p));
+            };
+            verts << v(t1,p1) << v(t2,p1) << v(t1,p2);
+            verts << v(t2,p1) << v(t2,p2) << v(t1,p2);
+        }
+    }
+    return verts;
+}
+
 void Stage3DView::drawTrackers()
 {
     for (auto it = trackerPositions_.constBegin(); it != trackerPositions_.constEnd(); ++it) {
@@ -797,7 +820,6 @@ void Stage3DView::drawTrackers()
         const float x = it.value().first;
         const float z = it.value().second;
 
-        // Find stage height at this position (platform objects only)
         float y = 0.0f;
         for (const auto& obj : stageObjects_)
             if (!obj.isStageOutline && obj.polygon.containsPoint({x, z}, Qt::OddEvenFill))
@@ -807,14 +829,16 @@ void Stage3DView::drawTrackers()
         for (const auto& t : trackers_)
             if (t.id == id) { color = t.color; break; }
 
-        // Draw a small cross / diamond marker
-        const float s = 0.15f;
-        QVector<QVector3D> cross = {
-            {x-s, y, z}, {x+s, y, z},
-            {x, y, z-s}, {x, y, z+s},
-            {x, y-s, z}, {x, y+s, z},
-        };
-        drawPrimitive(GL_LINES, cross, color);
+        drawPrimitive(GL_TRIANGLES, makeSphere(x, y, z, 0.25f), color);
+
+        if (showOutputMarkers_ && outputMarkerHeight_ > 0.001f) {
+            const float yOut = y + outputMarkerHeight_;
+            QColor ghost = color.lighter(160);
+            ghost.setAlpha(180);
+            drawPrimitive(GL_TRIANGLES, makeSphere(x, yOut, z, 0.15f), ghost, 0.7f);
+            QVector<QVector3D> pole = { {x, y + 0.25f, z}, {x, yOut - 0.15f, z} };
+            drawPrimitive(GL_LINES, pole, ghost, 0.7f);
+        }
     }
 }
 
@@ -852,6 +876,18 @@ void Stage3DView::setShowPsnOrigin(bool show)
 void Stage3DView::setShowMvrOrigins(bool show)
 {
     showMvrOrigins_ = show;
+    update();
+}
+
+void Stage3DView::setOutputMarkerHeight(float h)
+{
+    outputMarkerHeight_ = h;
+    update();
+}
+
+void Stage3DView::setShowOutputMarkers(bool show)
+{
+    showOutputMarkers_ = show;
     update();
 }
 

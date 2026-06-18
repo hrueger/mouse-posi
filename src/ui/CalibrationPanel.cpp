@@ -923,7 +923,15 @@ void CalibrationPanel::loadExisting(const CalibrationData& data) {
 }
 
 void CalibrationPanel::update3DControls() {
-    has3DControls_->setEnabled(result_.is3DValid());
+    const bool enable = result_.is3DValid()
+                        || mode_ == OperatingMode::Stage3DPSN
+                        || mode_ == OperatingMode::Stage3DDMX;
+    has3DControls_->setEnabled(enable);
+}
+
+void CalibrationPanel::setOperatingMode(OperatingMode mode) {
+    mode_ = mode;
+    update3DControls();
 }
 
 // ── Slots ─────────────────────────────────────────────────────────────────────

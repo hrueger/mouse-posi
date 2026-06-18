@@ -38,6 +38,8 @@ public:
     void setCameraMarker(QVector3D pos, float fovDeg, bool visible);
     void setFixtureRays(const QList<FixtureRay>& rays);
     void setShowRays(bool on);
+    void setOutputMarkerHeight(float h);
+    void setShowOutputMarkers(bool show);
 
 signals:
     void polygonDrawn(QPolygonF polygon);

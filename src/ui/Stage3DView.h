@@ -53,6 +53,8 @@ public:
     void setShowStageOrigin(bool show);
     void setShowPsnOrigin(bool show);
     void setShowMvrOrigins(bool show);
+    void setOutputMarkerHeight(float h);
+    void setShowOutputMarkers(bool show);
 
     Stage3DCameraState getCameraState() const;
     void               setCameraState(const Stage3DCameraState& s);
@@ -194,4 +196,8 @@ private:
     bool      showStageOrigin_  = true;
     bool      showPsnOrigin_    = true;
     bool      showMvrOrigins_   = true;
+
+    // PSN output ghost markers (2D-calibration + PSN mode)
+    float     outputMarkerHeight_ = 0.0f;
+    bool      showOutputMarkers_  = false;
 };

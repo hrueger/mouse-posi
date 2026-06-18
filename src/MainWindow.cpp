@@ -28,6 +28,7 @@
 #include "ui/StagePropertiesPanel.h"
 #include "ui/WelcomeScreen.h"
 #include "ui/SettingsDialog.h"
+#include "ui/InputAdaptersPanel.h"
 #include "ui/FixturesPanel.h"
 #include "ui/GdtfLibraryDialog.h"
 #include "ui/DmxMonitorPanel.h"
@@ -115,6 +116,12 @@ MainWindow::MainWindow(NdiReceiver* ndi,
     settingsDialog_  = new SettingsDialog(this);
     // Stream source panel moves into settings dialog
     settingsDialog_->setStreamSourcePanel(streamPanel_);
+    connect(settingsDialog_->adaptersPanel(), &InputAdaptersPanel::requestLearn,
+            this, [this]() {
+        for (auto* a : inputAdapters_)
+            if (auto* midi = qobject_cast<MidiInputAdapter*>(a))
+                midi->setLearning(true);
+    });
 
     // ── Dock layout ───────────────────────────────────────────────────────
     // Central widget: contains the welcome screen; shrunk to 0x0 in workspace mode
@@ -791,6 +798,9 @@ MainWindow::MainWindow(NdiReceiver* ndi,
         project_.operatingMode = mode;
         reconfigureDmxOutput();
         stage3DDock_->setVisible(mode != OperatingMode::Camera2D);
+        calibrationPanel_->setOperatingMode(mode);
+        const bool showOut = mode == OperatingMode::Stage3DPSN && !calibration_.has3D();
+        stage3DPanel_->setShowOutputMarkers(showOut);
         markDirty();
     });
 
@@ -1246,6 +1256,7 @@ void MainWindow::applyPlaneHeight(float h) {
     project_.calibrationView.clickPlaneHeight = h;
     video_->setClickPlaneHeight(h);
     calibrationPanel_->setPlaneHeight(h);
+    stage3DPanel_->setOutputMarkerHeight(h);
     markDirty();
 }
 
@@ -1451,6 +1462,7 @@ void MainWindow::applyProject() {
     settingsDialog_->setFixtureUniverseConfigs(project_.fixtureUniverseConfigs);
     settingsDialog_->setMvrData(project_.mvr);
     settingsDialog_->setOperatingMode(project_.operatingMode);
+    calibrationPanel_->setOperatingMode(project_.operatingMode);
     sessionPanel_->setSessionInterface(project_.network.sessionInterface);
     psnSender_->configure(project_.network);
     reconfigureDmxOutput();
@@ -1501,6 +1513,7 @@ void MainWindow::applyProject() {
     calibrationPanel_->setViewSettings(cv.showFloorGrid, cv.clickPlaneHeight, cv.showClickPlane);
     clickPlaneHeight_ = cv.clickPlaneHeight;
     video_->setClickPlaneHeight(cv.clickPlaneHeight);
+    stage3DPanel_->setOutputMarkerHeight(cv.clickPlaneHeight);
     video_->setShowFloorGrid(cv.showFloorGrid);
     video_->setShowClickPlane(cv.showClickPlane);
     video_->setCalibBoundaryVisible(cv.showCalibRectInVideo);
@@ -1682,6 +1695,8 @@ void MainWindow::onTimer() {
         }
     }
     stage3DPanel_->setTrackerPositions(trackerPositions_, project_.trackers);
+    stage3DPanel_->setShowOutputMarkers(project_.operatingMode == OperatingMode::Stage3DPSN
+                                        && !calibration_.has3D());
     frameCount_++;
 }
 
@@ -2200,6 +2215,12 @@ void MainWindow::reconfigureInputAdapters() {
         if (!adapter) continue;
         connect(adapter, &InputAdapterBase::clickPlaneHeightChanged,
                 this, [this](float h) { applyPlaneHeight(h); });
+        if (auto* midi = qobject_cast<MidiInputAdapter*>(adapter)) {
+            connect(midi, &MidiInputAdapter::midiEventReceived,
+                    settingsDialog_->adaptersPanel(), &InputAdaptersPanel::logMidiEvent);
+            connect(midi, &MidiInputAdapter::learnedCC,
+                    settingsDialog_->adaptersPanel(), &InputAdaptersPanel::applyLearnedCC);
+        }
         inputAdapters_.append(adapter);
         adapter->start();
     }

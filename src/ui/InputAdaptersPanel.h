@@ -13,6 +13,7 @@ class QDoubleSpinBox;
 class QScrollArea;
 class QVBoxLayout;
 class QHBoxLayout;
+class QPlainTextEdit;
 
 // Editable row widget for one MIDI InputAdapterMapping
 class MappingRowWidget : public QWidget {
@@ -20,15 +21,19 @@ class MappingRowWidget : public QWidget {
 public:
     explicit MappingRowWidget(const InputAdapterMapping& m, QWidget* parent = nullptr);
     InputAdapterMapping mapping() const;
+    void applyLearnedCC(int cc, int channel);
+    void setLearning(bool on);
 signals:
     void changed();
     void removeRequested();
+    void learnRequested();
 private:
-    QComboBox*  targetCombo_;
-    QSpinBox*   spin1_;      // CC number
-    QSpinBox*   spin2_;      // MIDI channel
+    QComboBox*   targetCombo_;
+    QSpinBox*    spin1_;       // CC number
+    QSpinBox*    spin2_;       // MIDI channel
     QDoubleSpinBox* minSpin_;
     QDoubleSpinBox* maxSpin_;
+    QPushButton* learnBtn_;
 };
 
 class InputAdaptersPanel : public QWidget {
@@ -39,8 +44,13 @@ public:
     void setAdapters(const QList<InputAdapterConfig>& adapters);
     QList<InputAdapterConfig> adapters() const { return adapters_; }
 
+public slots:
+    void logMidiEvent(int cc, int ch, int rawVal);
+    void applyLearnedCC(int cc, int ch);
+
 signals:
     void adaptersChanged(QList<InputAdapterConfig> adapters);
+    void requestLearn();
 
 private slots:
     void onAdapterSelectionChanged();
@@ -72,9 +82,12 @@ private:
     QWidget*      mappingContainer_;
     QVBoxLayout*  mappingLayout_;
     QPushButton*  addMappingBtn_;
+    // MIDI event log
+    QPlainTextEdit* midiLog_;
 
     QList<InputAdapterConfig>   adapters_;
     QList<MappingRowWidget*>    mappingRows_;
     int                         currentIndex_ = -1;
     bool                        updating_     = false;
+    MappingRowWidget*           learnRow_     = nullptr;
 };

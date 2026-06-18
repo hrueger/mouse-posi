@@ -242,3 +242,13 @@ void Stage3DPanel::setShowRays(bool on)
 {
     view_->setShowRays(on);
 }
+
+void Stage3DPanel::setOutputMarkerHeight(float h)
+{
+    view_->setOutputMarkerHeight(h);
+}
+
+void Stage3DPanel::setShowOutputMarkers(bool show)
+{
+    view_->setShowOutputMarkers(show);
+}
